@@ -28,6 +28,7 @@ import Data.Ix (Ix)
 import Data.Maybe (fromMaybe)
 
 import Language.Embedded.Expression
+import Language.Embedded.Traversal
 import Language.Embedded.Imperative.CMD
 import Language.Embedded.Imperative (getArr, setArr)
 
@@ -260,3 +261,6 @@ instance FreeExp IO
     type FreePred IO = Typeable
     constExp = return
     varExp   = error "varExp: unimplemented over IO"
+
+instance DryInterp ChanCMD
+instance DryInterp ThreadCMD
