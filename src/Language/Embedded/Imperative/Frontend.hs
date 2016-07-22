@@ -100,7 +100,7 @@ veryUnsafeFreezeRef (RefComp v) = varExp v
 --------------------------------------------------------------------------------
 
 -- | Create an uninitialized array
-newArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr)
+newArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
     => exp i  -- ^ Length
     -> ProgramT instr (Param2 exp pred) m (Arr i a)
 newArr = newNamedArr "a"
@@ -109,14 +109,14 @@ newArr = newNamedArr "a"
 --
 -- The provided base name may be appended with a unique identifier to avoid name
 -- collisions.
-newNamedArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr)
+newNamedArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
     => String -- ^ Base name
     -> exp i  -- ^ Length
     -> ProgramT instr (Param2 exp pred) m (Arr i a)
 newNamedArr base len = singleInj (NewArr base len)
 
 -- | Create and initialize an array
-initArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr)
+initArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
     => [a]  -- ^ Initial contents
     -> ProgramT instr (Param2 exp pred) m (Arr i a)
 initArr = initNamedArr "a"
@@ -125,7 +125,7 @@ initArr = initNamedArr "a"
 --
 -- The provided base name may be appended with a unique identifier to avoid name
 -- collisions.
-initNamedArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr)
+initNamedArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
     => String  -- ^ Base name
     -> [a]     -- ^ Initial contents
     -> ProgramT instr (Param2 exp pred) m (Arr i a)
@@ -134,6 +134,7 @@ initNamedArr base init = singleInj (InitArr base init)
 -- | Get an element of an array
 getArr
     :: ( pred a
+       , pred i
        , FreeExp exp
        , FreePred exp a
        , Integral i
@@ -145,14 +146,14 @@ getArr
 getArr i arr = fmap valToExp $ singleInj $ GetArr i arr
 
 -- | Set an element of an array
-setArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr) =>
+setArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr) =>
     exp i -> exp a -> Arr i a -> ProgramT instr (Param2 exp pred) m ()
 setArr i a arr = singleInj (SetArr i a arr)
 
 -- | Copy the contents of an array to another array. The number of elements to
 -- copy must not be greater than the number of allocated elements in either
 -- array.
-copyArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr)
+copyArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
     => (Arr i a, exp i)  -- ^ (destination,offset)
     -> (Arr i a, exp i)  -- ^ (source,offset
     -> exp i             -- ^ Number of elements
@@ -161,7 +162,7 @@ copyArr arr1 arr2 len = singleInj $ CopyArr arr1 arr2 len
 
 -- | Freeze a mutable array to an immutable one. This involves copying the array
 -- to a newly allocated one.
-freezeArr :: (pred a, Integral i, Ix i, Num (exp i), ArrCMD :<: instr, Monad m)
+freezeArr :: (pred a, pred i, Integral i, Ix i, Num (exp i), ArrCMD :<: instr, Monad m)
     => Arr i a
     -> exp i  -- ^ Length of new array
     -> ProgramT instr (Param2 exp pred) m (IArr i a)
@@ -173,13 +174,13 @@ freezeArr arr n = do
 -- | Freeze a mutable array to an immutable one without making a copy. This is
 -- generally only safe if the the mutable array is not updated as long as the
 -- immutable array is alive.
-unsafeFreezeArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr) =>
+unsafeFreezeArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr) =>
     Arr i a -> ProgramT instr (Param2 exp pred) m (IArr i a)
 unsafeFreezeArr arr = singleInj $ UnsafeFreezeArr arr
 
 -- | Thaw an immutable array to a mutable one. This involves copying the array
 -- to a newly allocated one.
-thawArr :: (pred a, Integral i, Ix i, Num (exp i), ArrCMD :<: instr, Monad m)
+thawArr :: (pred a, pred i, Integral i, Ix i, Num (exp i), ArrCMD :<: instr, Monad m)
     => IArr i a
     -> exp i  -- ^ Number of elements to copy
     -> ProgramT instr (Param2 exp pred) m (Arr i a)
@@ -192,12 +193,12 @@ thawArr arr n = do
 -- | Thaw an immutable array to a mutable one without making a copy. This is
 -- generally only safe if the the mutable array is not updated as long as the
 -- immutable array is alive.
-unsafeThawArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr) =>
+unsafeThawArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr) =>
     IArr i a -> ProgramT instr (Param2 exp pred) m (Arr i a)
 unsafeThawArr arr = singleInj $ UnsafeThawArr arr
 
 -- | Create and initialize an immutable array
-initIArr :: (pred a, Integral i, Ix i, ArrCMD :<: instr, Monad m) =>
+initIArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr, Monad m) =>
     [a] -> ProgramT instr (Param2 exp pred) m (IArr i a)
 initIArr = unsafeFreezeArr <=< initArr
 

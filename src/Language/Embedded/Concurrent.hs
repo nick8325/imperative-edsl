@@ -79,13 +79,13 @@ delayThread = singleton . inj . Sleep
 --   contents into the channel, so modifying it post-write is completely
 --   safe.
 newChan :: forall a i exp pred instr m
-        .  (pred a, Integral i, ChanCMD :<: instr)
+        .  (pred a, pred i, Integral i, ChanCMD :<: instr)
         => exp i
         -> ProgramT instr (Param2 exp pred) m (Chan Uncloseable a)
 newChan n = newChan' $ n `timesSizeOf` (Proxy :: Proxy a)
 
 newCloseableChan :: forall a i exp pred instr m
-                 .  (pred a, Integral i, ChanCMD :<: instr)
+                 .  (pred a, pred i, Integral i, ChanCMD :<: instr)
                  => exp i
                  -> ProgramT instr (Param2 exp pred) m (Chan Closeable a)
 newCloseableChan n = newCloseableChan' $ n `timesSizeOf` (Proxy :: Proxy a)
@@ -107,7 +107,7 @@ readChan = readChan'
 --   is defined as "channel contains less data than requested".
 --   Returns @False@ without reading any data if the channel is closed.
 readChanBuf :: ( Typeable a, pred a
-               , Ix i, Integral i
+               , pred i, Ix i, Integral i
                , FreeExp exp, FreePred exp Bool
                , ChanCMD :<: instr, Monad m )
             => Chan t a
@@ -135,7 +135,7 @@ writeChan = writeChan'
 --   is defined as "channel has insufficient free space to store all written
 --   data".
 writeChanBuf :: ( Typeable a, pred a
-                , Ix i, Integral i
+                , pred i, Ix i, Integral i
                 , FreeExp exp, FreePred exp Bool
                 , ChanCMD :<: instr, Monad m )
              => Chan t a
@@ -167,12 +167,12 @@ closeChan = singleInj . CloseChan
 -- Unsafe channel primitives
 --------------------------------------------------------------------------------
 
-newChan' :: (Integral i, ChanCMD :<: instr)
+newChan' :: (pred i, Integral i, ChanCMD :<: instr)
          => ChanSize exp pred i
          -> ProgramT instr (Param2 exp pred) m (Chan Uncloseable a)
 newChan' = singleInj . NewChan
 
-newCloseableChan' :: (Integral i, ChanCMD :<: instr)
+newCloseableChan' :: (pred i, Integral i, ChanCMD :<: instr)
                   => ChanSize exp pred i
                   -> ProgramT instr (Param2 exp pred) m (Chan Closeable a)
 newCloseableChan' = singleInj . NewChan
@@ -185,7 +185,7 @@ readChan' :: ( Typeable a, pred a
 readChan' = fmap valToExp . singleInj . ReadOne
 
 readChanBuf' :: ( Typeable a, pred a
-                , Ix i, Integral i
+                , pred i, Ix i, Integral i
                 , FreeExp exp, FreePred exp Bool
                 , ChanCMD :<: instr, Monad m )
              => Chan t c
@@ -204,7 +204,7 @@ writeChan' :: ( Typeable a, pred a
 writeChan' c = fmap valToExp . singleInj . WriteOne c
 
 writeChanBuf' :: ( Typeable a, pred a
-                 , Ix i, Integral i
+                 , pred i, Ix i, Integral i
                  , FreeExp exp, FreePred exp Bool
                  , ChanCMD :<: instr, Monad m )
               => Chan t c

@@ -182,14 +182,14 @@ instance ToIdent (IArr i a) where toIdent (IArrComp arr) = C.Id arr
 -- | Commands for mutable arrays
 data ArrCMD fs a
   where
-    NewArr  :: (pred a, Integral i, Ix i) => String -> exp i -> ArrCMD (Param3 prog exp pred) (Arr i a)
-    InitArr :: (pred a, Integral i, Ix i) => String -> [a] -> ArrCMD (Param3 prog exp pred) (Arr i a)
-    GetArr  :: (pred a, Integral i, Ix i) => exp i -> Arr i a -> ArrCMD (Param3 prog exp pred) (Val a)
-    SetArr  :: (pred a, Integral i, Ix i) => exp i -> exp a -> Arr i a -> ArrCMD (Param3 prog exp pred) ()
-    CopyArr :: (pred a, Integral i, Ix i) => (Arr i a, exp i) -> (Arr i a, exp i) -> exp i -> ArrCMD (Param3 prog exp pred) ()
+    NewArr  :: (pred a, pred i, Integral i, Ix i) => String -> exp i -> ArrCMD (Param3 prog exp pred) (Arr i a)
+    InitArr :: (pred a, pred i, Integral i, Ix i) => String -> [a] -> ArrCMD (Param3 prog exp pred) (Arr i a)
+    GetArr  :: (pred a, pred i, Integral i, Ix i) => exp i -> Arr i a -> ArrCMD (Param3 prog exp pred) (Val a)
+    SetArr  :: (pred a, pred i, Integral i, Ix i) => exp i -> exp a -> Arr i a -> ArrCMD (Param3 prog exp pred) ()
+    CopyArr :: (pred a, pred i, Integral i, Ix i) => (Arr i a, exp i) -> (Arr i a, exp i) -> exp i -> ArrCMD (Param3 prog exp pred) ()
       -- The arrays are paired with their offset
-    UnsafeFreezeArr :: (pred a, Integral i, Ix i) => Arr i a -> ArrCMD (Param3 prog exp pred) (IArr i a)
-    UnsafeThawArr   :: (pred a, Integral i, Ix i) => IArr i a -> ArrCMD (Param3 prog exp pred) (Arr i a)
+    UnsafeFreezeArr :: (pred a, pred i, Integral i, Ix i) => Arr i a -> ArrCMD (Param3 prog exp pred) (IArr i a)
+    UnsafeThawArr   :: (pred a, pred i, Integral i, Ix i) => IArr i a -> ArrCMD (Param3 prog exp pred) (Arr i a)
 #if  __GLASGOW_HASKELL__>=708
   deriving Typeable
 #endif
@@ -569,8 +569,8 @@ instance Assignable Object
 
 data C_CMD fs a
   where
-    NewCArr  :: (pred a, Integral i, Ix i) => String -> Maybe i -> exp i -> C_CMD (Param3 prog exp pred) (Arr i a)
-    InitCArr :: (pred a, Integral i, Ix i) => String -> Maybe i -> [a] -> C_CMD (Param3 prog exp pred) (Arr i a)
+    NewCArr  :: (pred a, pred i, Integral i, Ix i) => String -> Maybe i -> exp i -> C_CMD (Param3 prog exp pred) (Arr i a)
+    InitCArr :: (pred a, pred i, Integral i, Ix i) => String -> Maybe i -> [a] -> C_CMD (Param3 prog exp pred) (Arr i a)
     NewPtr   :: pred a => String -> C_CMD (Param3 prog exp pred) (Ptr a)
     PtrToArr :: Ptr a -> C_CMD (Param3 prog exp pred) (Arr i a)
     NewObject
