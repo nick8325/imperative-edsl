@@ -48,6 +48,10 @@ library
     Language.Embedded.Backend.C
     Language.Embedded.Backend.C.Expression
     Language.Embedded.CExp
+    Language.Embedded.Verify
+    Language.Embedded.Verify.FirstOrder
+    Language.Embedded.Verify.Abstract
+    Language.Embedded.Verify.Arithmetic
 
   other-modules:
     Language.Embedded.Imperative.Backend.C
@@ -88,6 +92,7 @@ library
   build-depends:
     array,
     base >=4 && <5,
+    constraints,
     containers,
     data-default-class,
     deepseq,
@@ -99,10 +104,12 @@ library
     microlens >= 0.3.0.0,
     microlens-mtl >= 0.1.8,
     microlens-th,
+    minisat,
     mtl,
     process,
     operational-alacarte >= 0.3,
     BoundedChan,
+    smtlib2,
     srcloc,
     syntactic >= 3.2,
     time >= 1.5.0.1,
