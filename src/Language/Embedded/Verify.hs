@@ -384,6 +384,10 @@ instance (SMT.SMTType a, Unit (SMTAnnotation a)) => Fresh (SMT.SMTExpr a) where
 class (Ord (Literal a), Typeable (Literal a), Show (Literal a), Fresh a) => Invariant a where
   data Literal a
 
+  -- Forget the value of a binding.
+  havoc :: String -> a -> Verify a
+  havoc name _ = fresh name
+
   -- Return a list of candidate literals for a value.
   literals :: String -> a -> [Literal a]
   literals _ _ = []
@@ -478,13 +482,25 @@ instance (SMTValue a, Show a) => ShowModel (SMT.SMTExpr a) where
 -- A normal variable binding.
 newtype ValBinding exp a = ValBinding (SMTExpr exp a)
   deriving (Eq, Show, Typeable)
-deriving instance SMTEval exp a => Mergeable (ValBinding exp a)
+instance SMTEval exp a => Mergeable (ValBinding exp a) where
+  merge _ x y
+    | x == y = x
+    | otherwise = error "immutable binding bound in two locations"
 deriving instance SMTEval exp a => ShowModel (ValBinding exp a)
 instance SMTEval exp a => Fresh (ValBinding exp a) where
   fresh name = fmap ValBinding (fresh name)
 instance SMTEval exp a => Invariant (ValBinding exp a) where
   data Literal (ValBinding exp a) = LitVB
     deriving (Eq, Ord, Show, Typeable)
+  havoc name = error ("immutable binding " ++ name ++ " rebound")
+
+peekVal :: SMTEval exp a => String -> Verify (SMTExpr exp a)
+peekVal name = do
+  ValBinding val <- peek name
+  return val
+
+pokeVal :: SMTEval exp a => String -> SMTExpr exp a -> Verify ()
+pokeVal name val = poke name (ValBinding val)
 
 -- A binding for a reference.
 data RefBinding exp a =
@@ -515,6 +531,31 @@ instance SMTEval exp a => Invariant (RefBinding exp a) where
     rb_initialised (lookupContext name ctx :: RefBinding exp a)
   smtLit ctx name RefWritable =
     rb_writable (lookupContext name ctx :: RefBinding exp a)
+
+newRef :: SMTEval exp a => String -> exp a -> Verify ()
+newRef name (_ :: exp a) = do
+  val <- fresh name
+  poke name (RefBinding val (constant False) (constant True) :: RefBinding exp a)
+
+getRef :: SMTEval exp a => String -> Verify (SMTExpr exp a)
+getRef name = do
+  ref <- peek name
+  safe <- provable (rb_initialised ref)
+  unless safe (warn (name ++ " read before initialisation"))
+  return (rb_value ref)
+
+setRef :: forall exp a. SMTEval exp a => String -> SMTExpr exp a -> Verify ()
+setRef name val = do
+  ref <- peek name :: Verify (RefBinding exp a)
+  safe <- provable (rb_writable ref)
+  unless safe (warn (name ++ " written after freezing"))
+  poke name ref{rb_value = val, rb_initialised = constant True}
+
+unsafeFreezeRef :: forall exp a. SMTEval exp a => String -> String -> exp a -> Verify ()
+unsafeFreezeRef refName valName (_ :: exp a) = do
+  ref <- peek refName :: Verify (RefBinding exp a)
+  poke refName ref{rb_writable = constant False}
+  poke valName (ValBinding (rb_value ref))
 
 -- An array binding.
 data ArrBinding exp i a =
@@ -555,7 +596,7 @@ producesValue :: forall instr prog exp a.
 producesValue instr (ValComp name :: Val a) =
   withWitness (undefined :: a) instr $ do
     val <- fresh name
-    poke name (ValBinding val :: ValBinding exp a)
+    pokeVal name (val :: SMTExpr exp a)
 
 instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr FileCMD exp pred where
   verifyInstr instr@FGet{} val = producesValue instr val
@@ -568,34 +609,25 @@ instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr C_CMD exp pred where
 instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr RefCMD exp pred where
   verifyInstr instr@NewRef{} ref@(RefComp name :: Ref a) =
     withWitness (undefined :: a) instr $ do
-      val <- fresh name
-      poke name (RefBinding val (constant False) (constant True) :: RefBinding exp a)
+      newRef name (undefined :: exp a)
 
-  verifyInstr instr@(InitRef _ value) (RefComp name :: Ref a) =
+  verifyInstr instr@(InitRef _ expr) (RefComp name :: Ref a) =
     withWitness (undefined :: a) instr $ do
-      val <- eval value >>= share
-      poke name (RefBinding val (constant True) (constant True) :: RefBinding exp a)
+      newRef name (undefined :: exp a)
+      eval expr >>= share >>= setRef name
 
   verifyInstr instr@(GetRef (RefComp refName)) (ValComp valName :: Val a) =
     withWitness (undefined :: a) instr $ do
-      ref <- peek refName :: Verify (RefBinding exp a)
-      safe <- provable (rb_initialised ref)
-      unless safe (warn (refName ++ " read before initialisation"))
-      poke valName (ValBinding (rb_value ref) :: ValBinding exp a)
+      val <- getRef refName :: Verify (SMTExpr exp a)
+      pokeVal valName val
 
   verifyInstr instr@(SetRef (RefComp name :: Ref a) expr) () =
     withWitness (undefined :: a) instr $ do
-      ref <- peek name :: Verify (RefBinding exp a)
-      safe <- provable (rb_writable ref)
-      unless safe (warn (name ++ " written after freezing"))
-      val <- eval expr >>= share
-      poke name (ref{rb_value = val, rb_initialised = constant True} :: RefBinding exp a)
+      eval expr >>= share >>= setRef name
 
   verifyInstr instr@(UnsafeFreezeRef (RefComp refName)) (ValComp valName :: Val a) =
     withWitness (undefined :: a) instr $ do
-      ref <- peek refName :: Verify (RefBinding exp a)
-      poke refName ref{rb_writable = constant False}
-      poke valName (ValBinding (rb_value ref))
+      unsafeFreezeRef refName valName (undefined :: exp a)
 
 instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
   verifyInstr instr@(NewArr _ n) arr@(ArrComp name :: Arr i a)
@@ -714,7 +746,8 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool, SMTTyp
       Dict <- witnessOrd (undefined :: exp a) = do
       let
         cond = do
-          ValBinding i <- peek name :: Verify (ValBinding exp a)
+          unsafeFreezeRef name name (undefined :: exp a)
+          i <- peekVal name
           n <- eval (borderVal hi)
           return (if borderIncl hi then i .<=. n else i .<. n)
         loop = do
@@ -722,11 +755,12 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool, SMTTyp
           ite (nott cond) break $ do
             breaks <- breaks (verify body)
             ite breaks (return ()) $ do
-              ValBinding i <- peek name :: Verify (ValBinding exp a)
-              poke name (ValBinding (i + fromIntegral step) :: ValBinding exp a)
+              i <- peekVal name :: Verify (SMTExpr exp a)
+              setRef name (i + fromIntegral step)
           return ()
       m <- eval lo
-      poke name (ValBinding m :: ValBinding exp a)
+      newRef name (undefined :: exp a)
+      setRef name m
       finished <- discoverInvariant loop
       body' <- stack (cond >>= assume >> verify body)
       finished
@@ -814,7 +848,9 @@ discoverInvariant body = do
     findFrame = stack $ quietly $ noWarn $ do
       -- Put the verifier in an arbitrary state.
       ctx <- get
-      assumeLiterals (Map.keys ctx) []
+      forM_ (Map.keys ctx) $ \(Name name (_ :: a)) -> do
+        val <- fresh name
+        poke name (val :: a)
 
       -- Run the program and see what changed.
       before <- get
@@ -836,8 +872,9 @@ discoverInvariant body = do
 
     assumeLiterals :: [Name] -> [[SomeLiteral]] -> Verify ()
     assumeLiterals frame clauses = do
-      forM_ frame $ \(Name name (x :: a)) -> do
-        val <- fresh name
+      ctx <- get
+      forM_ frame $ \(Name name (_ :: a)) -> do
+        val <- peek name >>= havoc name
         poke name (val :: a)
       mapM_ (evalClause >=> assume) clauses
 
