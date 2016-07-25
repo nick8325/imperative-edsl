@@ -14,6 +14,7 @@ import Data.Array.IO
 import Data.IORef
 import Data.Typeable
 import System.IO.Unsafe
+import Data.Constraint
 
 import Control.Monad.Operational.Higher
 import System.IO.Fake
@@ -304,19 +305,22 @@ feof = fmap valToExp . singleInj . FEof
 
 class PrintfType r
   where
-    type PrintfExp r :: * -> *
-    fprf :: Handle -> String -> [PrintfArg (PrintfExp r)] -> r
+    type PrintfExp  r :: * -> *
+    type PrintfPred r :: * -> Constraint
+    fprf :: Handle -> String -> [PrintfArg (PrintfExp r) (PrintfPred r)] -> r
 
 instance (FileCMD :<: instr, a ~ ()) =>
     PrintfType (ProgramT instr (Param2 exp pred) m a)
   where
-    type PrintfExp (ProgramT instr (Param2 exp pred) m a) = exp
+    type PrintfExp  (ProgramT instr (Param2 exp pred) m a) = exp
+    type PrintfPred (ProgramT instr (Param2 exp pred) m a) = pred
     fprf h form as = singleInj $ FPrintf h form (reverse as)
 
-instance (Formattable a, PrintfType r, exp ~ PrintfExp r) =>
+instance (Formattable a, pred a, PrintfType r, exp ~ PrintfExp r, pred ~ PrintfPred r) =>
     PrintfType (exp a -> r)
   where
     type PrintfExp  (exp a -> r) = exp
+    type PrintfPred (exp a -> r) = PrintfPred r
     fprf h form as = \a -> fprf h form (PrintfArg a : as)
 
 -- | Print to a handle. Accepts a variable number of arguments.
@@ -325,7 +329,7 @@ fprintf h format = fprf h format []
 
 -- | Put a single value to a handle
 fput :: forall instr exp pred a m
-    .  (Formattable a, FreePred exp a, FileCMD :<: instr)
+    .  (Formattable a, pred a, FreePred exp a, FileCMD :<: instr)
     => Handle
     -> String  -- ^ Prefix
     -> exp a   -- ^ Expression to print

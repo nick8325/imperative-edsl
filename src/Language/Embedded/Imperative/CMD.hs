@@ -384,18 +384,18 @@ stdin = HandleComp "stdin"
 stdout :: Handle
 stdout = HandleComp "stdout"
 
-data PrintfArg exp
+data PrintfArg exp pred
   where
-    PrintfArg :: Printf.PrintfArg a => exp a -> PrintfArg exp
+    PrintfArg :: (Printf.PrintfArg a, pred a) => exp a -> PrintfArg exp pred
 
 mapPrintfArg
-    :: (forall a . exp1 a -> exp2 a)
-    -> PrintfArg exp1 -> PrintfArg exp2
+    :: (forall a . pred a => exp1 a -> exp2 a)
+    -> PrintfArg exp1 pred -> PrintfArg exp2 pred
 mapPrintfArg f (PrintfArg exp) = PrintfArg (f exp)
 
 mapPrintfArgM :: Monad m
-    => (forall a . exp1 a -> m (exp2 a))
-    -> PrintfArg exp1 -> m (PrintfArg exp2)
+    => (forall a . pred a => exp1 a -> m (exp2 a))
+    -> PrintfArg exp1 pred -> m (PrintfArg exp2 pred)
 mapPrintfArgM f (PrintfArg exp) = liftM PrintfArg (f exp)
 
 -- | Values that can be printed\/scanned using @printf@\/@scanf@
@@ -433,11 +433,11 @@ instance Formattable Double
 
 data FileCMD fs a
   where
-    FOpen   :: FilePath -> IOMode                  -> FileCMD (Param3 prog exp pred) Handle
-    FClose  :: Handle                              -> FileCMD (Param3 prog exp pred) ()
-    FEof    :: Handle                              -> FileCMD (Param3 prog exp pred) (Val Bool)
-    FPrintf :: Handle -> String -> [PrintfArg exp] -> FileCMD (Param3 prog exp pred) ()
-    FGet    :: (pred a, Formattable a) => Handle   -> FileCMD (Param3 prog exp pred) (Val a)
+    FOpen   :: FilePath -> IOMode                       -> FileCMD (Param3 prog exp pred) Handle
+    FClose  :: Handle                                   -> FileCMD (Param3 prog exp pred) ()
+    FEof    :: Handle                                   -> FileCMD (Param3 prog exp pred) (Val Bool)
+    FPrintf :: Handle -> String -> [PrintfArg exp pred] -> FileCMD (Param3 prog exp pred) ()
+    FGet    :: (pred a, Formattable a) => Handle        -> FileCMD (Param3 prog exp pred) (Val a)
 
 instance HFunctor FileCMD
   where
@@ -766,7 +766,7 @@ readWord h = do
         cs <- readWord h
         return (c:cs)
 
-runFPrintf :: [PrintfArg IO] -> (forall r . Printf.HPrintfType r => r) -> IO ()
+runFPrintf :: [PrintfArg IO pred] -> (forall r . Printf.HPrintfType r => r) -> IO ()
 runFPrintf []               pf = pf
 runFPrintf (PrintfArg a:as) pf = a >>= \a' -> runFPrintf as (pf a')
 
