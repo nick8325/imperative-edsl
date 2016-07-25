@@ -664,7 +664,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
         n = fromIntegral (length xs)
 
       forM_ (zip is ys) $ \(i, x) ->
-        assume (select val (toSMT n) SMT..==. toSMT x)
+        assume (select val (toSMT i) SMT..==. toSMT x)
 
       poke name (ArrBinding val n :: ArrBinding exp i a)
 
