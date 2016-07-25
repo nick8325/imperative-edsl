@@ -52,6 +52,7 @@ library
     Language.Embedded.Verify.FirstOrder
     Language.Embedded.Verify.Abstract
     Language.Embedded.Verify.Arithmetic
+    Language.Embedded.Verify.SMT
 
   other-modules:
     Language.Embedded.Imperative.Backend.C
@@ -109,7 +110,7 @@ library
     process,
     operational-alacarte >= 0.3,
     BoundedChan,
-    smtlib2,
+    simple-smt,
     srcloc,
     syntactic >= 3.2,
     time >= 1.5.0.1,

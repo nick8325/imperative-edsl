@@ -24,13 +24,8 @@ import Language.Embedded.Concurrent.CMD
 import Language.Embedded.Verify.FirstOrder
 import qualified Language.Embedded.Verify.Abstract as Abstract
 import Control.Monad.Operational.Higher(Program)
-
-import qualified Language.SMTLib2 as SMT
-import Language.SMTLib2 hiding (stack, SMTExpr, SMTType, SMTExpr, SMTOrd(..), Args, ite, (.==.))
-import Language.SMTLib2.Internals(SMT'(..))
-import Language.SMTLib2.Solver
-import Language.SMTLib2.Pipe
-import Data.Unit
+import Language.Embedded.Verify.SMT hiding (not, ite, stack, concat)
+import qualified Language.Embedded.Verify.SMT as SMT
 
 ----------------------------------------------------------------------
 -- The verification monad.
@@ -69,45 +64,40 @@ import Data.Unit
 -- following components:
 --
 -- Read:  list of formulas which are true in the current branch;
---        "chattiness level" (if > 0 then tracing messages are printed);
---        a set of global functions
+--        "chattiness level" (if > 0 then tracing messages are printed)
 -- Write: disjunction which is true if the program has called break;
 --        list of warnings generated
 -- State: the context, a map from variables to SMT values
-type Verify = RWST ([Formula], Int, Map String Global) ([Formula], [String]) Context SMT
-data Global = forall a. Typeable a => Global a
+type Verify = RWST ([SExpr], Int) ([SExpr], [String]) Context SMT
 
 runVerify :: Verify a -> IO (a, [String])
-runVerify m = withZ3 $ do
-  setOption (ProduceModels False)
-  setOption (ProduceProofs False)
-  setOption (ProduceUnsatCores False)
-  setOption (ProduceInterpolants False)
-  (x, (_, warns)) <- evalRWST m ([], 0, Map.empty) Map.empty
+runVerify m = runZ3 ["-t:1000"] $ do
+  SMT.setOption ":produce-models" "false"
+  (x, (_, warns)) <- evalRWST m ([], 0) Map.empty
   return (x, warns)
 
 -- Assume that a given formula is true.
-assume :: Formula -> Verify ()
+assume :: SExpr -> Verify ()
 assume p = do
   branch <- branch
   trace "Asserted" p
-  lift (SMT.assert (disj (p:map nott branch)))
+  lift (assert (disj (p:map SMT.not branch)))
 
 -- Check if a given formula holds.
-provable :: Formula -> Verify Bool
+provable :: SExpr -> Verify Bool
 provable p = do
   branch <- branch
   stack $ do
     res <- lift $ do
-      mapM_ SMT.assert branch
-      SMT.assert (nott p)
-      checkSat' Nothing (CheckSatLimits (Just 1000) Nothing)
+      mapM_ assert branch
+      assert (SMT.not p)
+      check
     chat $
       case res of
         Sat -> stack $ do
           trace "Failed to prove" p
-          lift $ setOption (ProduceModels True)
-          lift $ checkSat
+          lift $ setOption ":produce-models" "true"
+          lift $ check
           context <- get
           model   <- showModel context
           liftIO $ putStrLn ("  (countermodel is " ++ model ++ ")")
@@ -116,42 +106,39 @@ provable p = do
     return (res == Unsat)
 
 -- Print a formula for debugging purposes.
-trace :: String -> Formula -> Verify ()
+trace :: String -> SExpr -> Verify ()
 trace kind p = chat $ do
   branch <- branch
-  q <- lift $ renderExpr p
 
-  liftIO $ putStr (kind ++ " " ++ q)
-  case branch of
-    [] -> liftIO $ putStrLn ""
-    [x] -> do
-      str <- lift $ renderExpr x
-      liftIO $ putStrLn (" assuming " ++ str)
-    _ -> do
-      liftIO $ putStrLn " assuming:"
-      sequence_ [
-          do { str <- lift $ renderExpr x; liftIO $ putStrLn ("  " ++ str) }
-        | x <- branch ]
+  liftIO $ do
+    putStr (kind ++ " " ++ show p)
+    case branch of
+      [] -> putStrLn ""
+      [x] -> do
+        putStrLn (" assuming " ++ show x)
+      _ -> do
+        putStrLn " assuming:"
+        sequence_ [ putStrLn ("  " ++ show x) | x <- branch ]
 
 -- Run a computation but undo its effects afterwards.
 stack :: Verify a -> Verify a
 stack mx = do
   state <- get
   read <- ask
-  fmap fst $ lift $ SMT.stack (evalRWST mx read state)
+  fmap fst $ lift $ SMT.stack $ evalRWST mx read state
 
 -- Branch on the value of a formula.
-ite :: Formula -> Verify a -> Verify b -> Verify (a, b)
+ite :: SExpr -> Verify a -> Verify b -> Verify (a, b)
 ite p mx my = do
   ctx <- get
   read <- ask
   let
     withBranch p
-      | p == constant True  = local id
-      | p == constant False = local (\(_,  x, y) -> ([p],  x, y))
-      | otherwise           = local (\(xs, x, y) -> (p:xs, x, y))
+      | p == bool True  = local id
+      | p == bool False = local (\(_,  x) -> ([p],  x))
+      | otherwise       = local (\(xs, x) -> (p:xs, x))
   (x, ctx1, (break1, warns1)) <- lift $ runRWST (withBranch p mx) read ctx
-  (y, ctx2, (break2, warns2)) <- lift $ runRWST (withBranch (nott p) my) read ctx
+  (y, ctx2, (break2, warns2)) <- lift $ runRWST (withBranch (SMT.not p) my) read ctx
   put (merge p ctx1 ctx2)
   let
     break
@@ -161,8 +148,8 @@ ite p mx my = do
   return (x, y)
 
 -- Read the current branch.
-branch :: Verify [Formula]
-branch = asks (\(xs, _, _) -> xs)
+branch :: Verify [SExpr]
+branch = asks fst
 
 -- Read the context.
 peek :: (Typeable a, Eq a, Mergeable a, Show a, ShowModel a, Invariant a) => String -> Verify a
@@ -174,23 +161,6 @@ peek name = do
 poke :: (Typeable a, Eq a, Mergeable a, Show a, ShowModel a, Invariant a) => String -> a -> Verify ()
 poke name val = modify (insertContext name val)
 
--- Find a global.
-global :: Typeable a => String -> Verify a
-global name = do
-  (_, _, globals) <- ask
-  case Map.lookup name globals of
-    Nothing -> error ("Global " ++ name ++ " not found")
-    Just (Global x) ->
-      return $
-        case cast x of
-          Nothing -> error ("Two globals with name " ++ name)
-          Just y  -> y
-
--- Register some globals.
-withGlobals :: [(String, Global)] -> Verify a -> Verify a
-withGlobals xs =
-  local (\(x, y, globals) -> (x, y, Map.union globals (Map.fromList xs)))
-
 -- Record that execution has broken here.
 break :: Verify ()
 break = do
@@ -198,14 +168,14 @@ break = do
   tell ([conj branch], [])
 
 -- Check if execution of a statement can break.
-withBreaks :: Verify a -> Verify (a, Formula)
+withBreaks :: Verify a -> Verify (a, SExpr)
 withBreaks mx = do
   (x, (exits, _)) <- listen mx
   return (x, disj exits)
 
 -- Check if execution of a statement can break, discarding the
 -- statement's result.
-breaks :: Verify a -> Verify Formula
+breaks :: Verify a -> Verify SExpr
 breaks mx = fmap snd (withBreaks mx)
 
 -- Prevent a statement from breaking.
@@ -222,16 +192,16 @@ noWarn = censor (\(breaks, _) -> (breaks, []))
 
 -- Run a computation more chattily.
 chattily :: Verify a -> Verify a
-chattily = local (\(ctx, n, globals) -> (ctx, n+1, globals))
+chattily = local (\(ctx, n) -> (ctx, n+1))
 
 -- Run a computation more quietly.
 quietly :: Verify a -> Verify a
-quietly = local (\(ctx, n, globals) -> (ctx, n-1, globals))
+quietly = local (\(ctx, n) -> (ctx, n-1))
 
 -- Produce debug output.
 chat :: Verify () -> Verify ()
 chat mx = do
-  (_, chatty, _) <- ask
+  (_, chatty) <- ask
   when (chatty > 0) mx
 
 ----------------------------------------------------------------------
@@ -275,26 +245,6 @@ instance (VerifyInstr f exp pred, VerifyInstr g exp pred) => VerifyInstr (f :+: 
 -- Expressions and invariants.
 ----------------------------------------------------------------------
 
-type Formula = SMT.SMTExpr Bool
-
-nott :: Formula -> Formula
-nott p
-  | p == constant True  = constant False
-  | p == constant False = constant True
-  | otherwise = not' p
-
-conj :: [Formula] -> Formula
-conj xs | constant False `elem` xs = constant False
-conj [] = constant True
-conj [x] = x
-conj xs = app and' xs
-
-disj :: [Formula] -> Formula
-disj xs | constant True `elem` xs = constant True
-disj [] = constant False
-disj [x] = x
-disj xs = app or' xs
-
 -- A typeclass for expressions which can be evaluated under a context.
 class Typeable exp => SMTEval1 exp where
   -- The result type of evaluating the expression.
@@ -308,13 +258,7 @@ class Typeable exp => SMTEval1 exp where
   witnessPred :: Pred exp a => exp a -> Dict (SMTEval exp a)
 
 -- A typeclass for expressions of a particular type.
-class (SMTEval1 exp, Fresh (SMTExpr exp a), SMT.SMTValue (SMTType exp a), Unit (SMTAnnotation (SMTType exp a)), Typeable a) => SMTEval exp a where
-  type SMTType exp a
-  type SMTType exp a = a
-
-  toSMT   :: SMTExpr exp a -> SMT.SMTExpr (SMTType exp a)
-  fromSMT :: SMT.SMTExpr (SMTType exp a) -> SMTExpr exp a
-
+class (SMTEval1 exp, TypedSExpr (SMTExpr exp a), Typeable a) => SMTEval exp a where
   fromConstant :: a -> SMTExpr exp a
 
   witnessNum :: Num a => exp a -> Dict (Num (SMTExpr exp a))
@@ -326,18 +270,17 @@ class (SMTEval1 exp, Fresh (SMTExpr exp a), SMT.SMTValue (SMTType exp a), Unit (
   witnessIntegral :: Integral a => exp a -> Dict (Num (SMTExpr exp a))
   witnessIntegral = error "witnessIntegral"
 
+class Fresh a => TypedSExpr a where
+  smtType :: a -> SExpr
+  toSMT   :: a -> SExpr
+  fromSMT :: SExpr -> a
+
+freshSExpr :: forall a. TypedSExpr a => String -> Verify a
+freshSExpr name = fmap fromSMT (freshVar name (smtType (undefined :: a)))
+
 -- A replacement for the SMTOrd class.
 class SMTOrd a where
-  (.<.), (.<=.), (.>.), (.>=.) :: a -> a -> Formula
-
-  default (.<.)  :: (a ~ SMT.SMTExpr b, SMT.SMTOrd b) => a -> a -> Formula
-  default (.>.)  :: (a ~ SMT.SMTExpr b, SMT.SMTOrd b) => a -> a -> Formula
-  default (.<=.) :: (a ~ SMT.SMTExpr b, SMT.SMTOrd b) => a -> a -> Formula
-  default (.>=.) :: (a ~ SMT.SMTExpr b, SMT.SMTOrd b) => a -> a -> Formula
-  (.<.) = (SMT..<.)
-  (.>.) = (SMT..>.)
-  (.<=.) = (SMT..<=.)
-  (.>=.) = (SMT..>=.)
+  (.<.), (.<=.), (.>.), (.>=.) :: a -> a -> SExpr
 
 instance SMTEval exp a => Eq (SMTExpr exp a) where
   x == y = toSMT x == toSMT y
@@ -351,25 +294,22 @@ instance SMTEval exp a => Mergeable (SMTExpr exp a) where
 instance SMTEval exp a => ShowModel (SMTExpr exp a) where
   showModel x = showModel (toSMT x)
 
+instance SMTEval exp a => Fresh (SMTExpr exp a) where
+  fresh name =
+    fmap fromSMT (freshVar name (smtType (undefined :: SMTExpr exp a)))
+
 -- Bind an expression into an SMT variable to increase sharing.
-share :: SMTEval exp a => SMTExpr exp a -> Verify (SMTExpr exp a)
+share :: TypedSExpr a => a -> Verify a
 share exp = do
   x <- fresh "let"
   assume (x .==. exp)
   return x
 
--- Bind an SMT expression into an SMT variable to increase sharing.
-shareSMT :: (SMT.SMTType a, Unit (SMTAnnotation a)) => SMT.SMTExpr a -> Verify (SMT.SMTExpr a)
-shareSMT exp = do
-  x <- fresh "let"
-  assume (x SMT..==. exp)
-  return x
-
 -- A few typed replacements for SMTLib functionality.
-(.==.) :: SMTEval exp a => SMTExpr exp a -> SMTExpr exp a -> Formula
-x .==. y = toSMT x SMT..==. toSMT y
+(.==.) :: TypedSExpr a => a -> a -> SExpr
+x .==. y = toSMT x `eq` toSMT y
 
-smtIte :: SMTEval exp a => Formula -> SMTExpr exp a -> SMTExpr exp a -> SMTExpr exp a
+smtIte :: TypedSExpr a => SExpr -> a -> a -> a
 smtIte cond x y = fromSMT (SMT.ite cond (toSMT x) (toSMT y))
 
 class Fresh a where
@@ -377,8 +317,9 @@ class Fresh a where
   -- The String argument is a hint for making pretty names.
   fresh :: String -> Verify a
 
-instance (SMT.SMTType a, Unit (SMTAnnotation a)) => Fresh (SMT.SMTExpr a) where
-  fresh = lift . varNamed
+freshVar name ty = do
+  n <- lift freshNum
+  lift $ declare (name ++ show n) ty
 
 -- A typeclass for values that can undergo predicate abstraction.
 class (Ord (Literal a), Typeable (Literal a), Show (Literal a), Fresh a) => Invariant a where
@@ -393,7 +334,7 @@ class (Ord (Literal a), Typeable (Literal a), Show (Literal a), Fresh a) => Inva
   literals _ _ = []
 
   -- Evaluate a literal.
-  smtLit :: Context -> String -> Literal a -> Formula
+  smtLit :: Context -> String -> Literal a -> SExpr
   smtLit _ _ _ = error "smtLit not defined"
 
 ----------------------------------------------------------------------
@@ -440,7 +381,7 @@ modified ctx1 ctx2 =
 
 -- A typeclass for values that support if-then-else.
 class Mergeable a where
-  merge :: Formula -> a -> a -> a
+  merge :: SExpr -> a -> a -> a
 
 instance Mergeable Context where
   merge cond = Map.intersectionWith (merge cond)
@@ -451,7 +392,7 @@ instance Mergeable Entry where
       Just y  -> Entry (merge cond x y)
       Nothing -> error "incompatible types in merge"
 
-instance SMT.SMTType a => Mergeable (SMT.SMTExpr a) where
+instance Mergeable SExpr where
   merge cond t e
     | t == e = t
     | otherwise = SMT.ite cond t e
@@ -470,9 +411,9 @@ instance ShowModel Context where
 instance ShowModel Entry where
   showModel (Entry x) = showModel x
 
-instance (SMTValue a, Show a) => ShowModel (SMT.SMTExpr a) where
+instance ShowModel SExpr where
   showModel x = do
-    val <- lift (getValue x)
+    val <- lift (getExpr x)
     return (show val)
 
 ----------------------------------------------------------------------
@@ -518,7 +459,7 @@ pokeVal name val = poke name (ValBinding val Nothing)
 data RefBinding exp a =
   RefBinding {
     rb_value       :: SMTExpr exp a,
-    rb_initialised :: Formula }
+    rb_initialised :: SExpr }
   deriving (Eq, Show, Typeable)
 
 instance SMTEval exp a => Mergeable (RefBinding exp a) where
@@ -529,7 +470,7 @@ instance SMTEval exp a => ShowModel (RefBinding exp a) where
 instance SMTEval exp a => Fresh (RefBinding exp a) where
   fresh name = do
     value   <- fresh name
-    init    <- fresh (name ++ ".init")
+    init    <- freshVar (name ++ ".init") tBool
     return (RefBinding value init)
 instance SMTEval exp a => Invariant (RefBinding exp a) where
   data Literal (RefBinding exp a) = RefInitialised | RefWritable
@@ -543,7 +484,7 @@ instance SMTEval exp a => Invariant (RefBinding exp a) where
 newRef :: SMTEval exp a => String -> exp a -> Verify ()
 newRef name (_ :: exp a) = do
   ref <- fresh name
-  poke name (ref { rb_initialised = constant False } :: RefBinding exp a)
+  poke name (ref { rb_initialised = bool False } :: RefBinding exp a)
 
 getRef :: SMTEval exp a => String -> Verify (SMTExpr exp a)
 getRef name = do
@@ -555,7 +496,7 @@ getRef name = do
 setRef :: forall exp a. SMTEval exp a => String -> SMTExpr exp a -> Verify ()
 setRef name val = do
   ref <- peek name :: Verify (RefBinding exp a)
-  poke name ref{rb_value = val, rb_initialised = constant True}
+  poke name ref{rb_value = val, rb_initialised = bool True}
 
 unsafeFreezeRef :: forall exp a. SMTEval exp a => String -> String -> exp a -> Verify ()
 unsafeFreezeRef refName valName (_ :: exp a) = do
@@ -565,7 +506,7 @@ unsafeFreezeRef refName valName (_ :: exp a) = do
 -- An array binding.
 data ArrBinding exp i a =
   ArrBinding {
-    arr_value :: SMT.SMTExpr (SMTArray (SMT.SMTExpr (SMTType exp i)) (SMTType exp a)),
+    arr_value :: SMTArray exp i a,
     arr_bound :: SMTExpr exp i }
   deriving (Eq, Typeable, Show)
 instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a) where
@@ -574,10 +515,25 @@ instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a) where
 instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrBinding exp i a) where
   showModel _ = return "<array>"
 instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrBinding exp i a) where
-  fresh name = liftM2 ArrBinding (lift (varNamed name)) (fresh (name ++ ".bound"))
+  fresh name = do
+    arr   <- fresh name
+    bound <- fresh (name ++ ".bound")
+    return (ArrBinding arr bound)
 instance (SMTEval exp a, SMTEval exp i) => Invariant (ArrBinding exp i a) where
   data Literal (ArrBinding exp i a) = LitAB
-    deriving (Eq, Ord, Show, Typeable)
+    deriving Typeable
+deriving instance SMTEval exp a => Eq   (Literal (ArrBinding exp i a))
+deriving instance SMTEval exp a => Ord  (Literal (ArrBinding exp i a))
+deriving instance SMTEval exp a => Show (Literal (ArrBinding exp i a))
+
+-- A wrapper to help with fresh name generation.
+newtype SMTArray exp i a = SMTArray SExpr deriving (Eq, Ord, Show, Mergeable)
+instance (SMTEval exp a, SMTEval exp i) => Fresh (SMTArray exp i a) where
+  fresh = freshSExpr
+instance (SMTEval exp a, SMTEval exp i) => TypedSExpr (SMTArray exp i a) where
+  smtType _ = tArray (smtType (undefined :: SMTExpr exp i)) (smtType (undefined :: SMTExpr exp a))
+  toSMT (SMTArray arr) = arr
+  fromSMT = SMTArray
 
 ----------------------------------------------------------------------
 -- Instances for the standard non-control flow command datatypes.
@@ -664,7 +620,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
         n = fromIntegral (length xs)
 
       forM_ (zip is ys) $ \(i, x) ->
-        assume (select val (toSMT i) SMT..==. toSMT x)
+        assume (select (toSMT val) (toSMT i) `eq` toSMT x)
 
       poke name (ArrBinding val n :: ArrBinding exp i a)
 
@@ -673,7 +629,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
     withWitness (undefined :: a) instr $ do
       arr <- peek arrName :: Verify (ArrBinding exp i a)
       ix  <- eval ix
-      val <- share (fromSMT (select (arr_value arr) (toSMT ix)))
+      val <- share (fromSMT (select (toSMT (arr_value arr)) (toSMT ix)))
       pokeVal valName (val :: SMTExpr exp a)
 
   verifyInstr instr@(SetArr ix val (ArrComp arrName :: Arr i a)) ()
@@ -682,7 +638,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
       ArrBinding{..} <- peek arrName :: Verify (ArrBinding exp i a)
       ix  <- eval ix
       val <- eval val
-      arr_value' <- shareSMT (store arr_value (toSMT ix) (toSMT val))
+      arr_value' <- share (fromSMT (store (toSMT arr_value) (toSMT ix) (toSMT val)))
       poke arrName (ArrBinding arr_value' arr_bound :: ArrBinding exp i a)
 
   verifyInstr instr@(CopyArr (ArrComp destName :: Arr i a, destOfs) (ArrComp srcName, srcOfs) len) ()
@@ -722,7 +678,7 @@ instance VerifyInstr PtrCMD exp pred where
 -- An instance for ControlCMD - where the magic happens
 ----------------------------------------------------------------------
 
-instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool, SMTType exp Bool ~ Bool) => VerifyInstr ControlCMD exp pred where
+instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => VerifyInstr ControlCMD exp pred where
   verifyInstr (Assert Nothing msg) () =
     return (Assert Nothing msg)
   verifyInstr (Assert (Just cond) msg) () = do
@@ -766,7 +722,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool, SMTTyp
           return (if borderIncl hi then i .<=. n else i .<. n)
         loop = do
           cond <- cond
-          ite (nott cond) break $ do
+          ite (SMT.not cond) break $ do
             breaks <- breaks (verify body)
             ite breaks (return ()) $ do
               i <- peekVal name :: Verify (SMTExpr exp a)
@@ -876,7 +832,7 @@ discoverInvariant body = do
     refine frame clauses = do
       clauses' <- stack $ quietly $ noWarn $ do
         assumeLiterals frame clauses
-        noBreak (breaks body) >>= assume . nott
+        noBreak (breaks body) >>= assume . SMT.not
         fmap (disjunction clauses) (abstract frame)
 
       if clauses == clauses' then do
@@ -917,18 +873,3 @@ discoverInvariant body = do
 
     usort :: Ord a => [a] -> [a]
     usort = map head . group . sort
-
-----------------------------------------------------------------------
--- Extra instances we need for the SMT monad.
-----------------------------------------------------------------------
-
-instance MonadException m => MonadException (SMT' m) where
-  throw = lift . throw
-  catch mx k =
-    SMT (\s -> catch (runSMT mx s) (\e -> runSMT (k e) s))
-
-instance MonadAsyncException m => MonadAsyncException (SMT' m) where
-  mask mx = SMT (\s -> mask (\k -> runSMT (mx (mapSMT k)) s))
-    where
-      mapSMT :: (forall s. SMTBackend s m => m (a, s) -> m (b, s)) -> SMT' m a -> SMT' m b
-      mapSMT f (SMT m) = SMT (f . m)

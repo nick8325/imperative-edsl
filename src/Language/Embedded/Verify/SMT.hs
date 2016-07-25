@@ -1,0 +1,77 @@
+-- A thin layer on top of simple-smt.
+module Language.Embedded.Verify.SMT(
+  module Language.Embedded.Verify.SMT,
+  module SimpleSMT) where
+
+import Control.Monad.State.Strict
+import qualified SimpleSMT as SMT
+import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, ite, eq, tBool, tInt, tArray, tBits, tReal, select, store, bvBin, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv)
+import Control.Applicative
+
+type SMT = StateT SMTState IO
+data SMTState =
+  SMTState {
+    st_solver :: SMT.Solver,
+    st_next   :: Integer }
+
+runZ3 :: [String] -> SMT a -> IO a
+runZ3 args m = do
+  solver <- SMT.newSolver "z3" (["-smt2", "-in"] ++ args) Nothing
+  evalStateT m (SMTState solver 0)
+
+freshNum :: SMT Integer
+freshNum = do
+  st <- get
+  put st { st_next = st_next st + 1 }
+  return (st_next st)
+
+withSolver :: (SMT.Solver -> SMT a) -> SMT a
+withSolver k = do
+  st <- get
+  k (st_solver st)
+
+stack :: SMT a -> SMT a
+stack m = withSolver $ \solver ->
+  lift (SMT.push solver) *> m <* lift (SMT.pop solver)
+
+not :: SExpr -> SExpr
+not p
+  | p == bool True  = bool False
+  | p == bool False = bool True
+  | otherwise = SMT.not p
+
+conj :: [SExpr] -> SExpr
+conj xs | bool False `elem` xs = bool False
+conj [] = bool True
+conj [x] = x
+conj xs = fun "and" xs
+
+disj :: [SExpr] -> SExpr
+disj xs | bool True `elem` xs = bool True
+disj [] = bool False
+disj [x] = x
+disj xs = fun "or" xs
+
+(.||.), (.&&.) :: SExpr -> SExpr -> SExpr
+x .||. y = disj [x, y]
+x .&&. y = conj [x, y]
+
+setOption :: String -> String -> SMT ()
+setOption opt val = withSolver $ \solver ->
+  lift (SMT.setOption solver opt val)
+
+getExpr :: SExpr -> SMT Value
+getExpr exp = withSolver $ \solver ->
+  lift (SMT.getExpr solver exp)
+
+assert :: SExpr -> SMT ()
+assert expr = withSolver $ \solver ->
+  lift (SMT.assert solver expr)
+
+check :: SMT Result
+check = withSolver $ \solver ->
+  lift (SMT.check solver)
+
+declare :: String -> SExpr -> SMT SExpr
+declare name ty = withSolver $ \solver ->
+  lift (SMT.declare solver name ty)

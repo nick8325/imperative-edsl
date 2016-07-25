@@ -4,34 +4,94 @@
 module Language.Embedded.Verify.Arithmetic where
 
 import Data.Typeable
-import Language.SMTLib2 hiding (SMTOrd(..))
-import Language.SMTLib2.Internals hiding (SMTOrd(..))
-import Language.Embedded.Verify hiding (SMTExpr)
+import Language.Embedded.Verify hiding (ite)
+import Language.Embedded.Verify.SMT
+import qualified Language.Embedded.Verify.SMT as SMT
 
-newtype Signed n = Signed (SMTExpr (BitVector (BVTyped n)))
-  deriving (Eq, Ord, Num, Typeable)
-instance Show (Signed n) where
-  show (Signed x) = show x
+data W8
+data W16
+data W32
+data W64
 
-instance TypeableNat n => Fresh (Signed n) where
-  fresh = fmap Signed . fresh
+class Width w where width :: Num a => w -> a
+instance Width W8  where width _ = 8
+instance Width W16 where width _ = 16
+instance Width W32 where width _ = 32
+instance Width W64 where width _ = 64
 
-instance TypeableNat n => SMTOrd (Signed n) where
-  Signed x .<.  Signed y = bvslt x y
-  Signed x .>.  Signed y = bvsgt x y
-  Signed x .<=. Signed y = bvsle x y
-  Signed x .>=. Signed y = bvsge x y
+data Signed
+data Unsigned
 
-newtype Unsigned n = Unsigned (SMTExpr (BitVector (BVTyped n)))
-  deriving (Eq, Ord, Num, Typeable)
-instance Show (Unsigned n) where
-  show (Unsigned x) = show x
+class Sign s where isSigned :: BV s w -> Bool
+instance Sign Signed   where isSigned _ = True
+instance Sign Unsigned where isSigned _ = False
 
-instance TypeableNat n => Fresh (Unsigned n) where
-  fresh = fmap Unsigned . fresh
+newtype BV s w = BV { unBV :: SExpr }
+  deriving (Eq, Ord, Typeable)
+instance Show (BV s a) where
+  show (BV x) = show x
 
-instance TypeableNat n => SMTOrd (Unsigned n) where
-  Unsigned x .<.  Unsigned y = bvult x y
-  Unsigned x .>.  Unsigned y = bvugt x y
-  Unsigned x .<=. Unsigned y = bvule x y
-  Unsigned x .>=. Unsigned y = bvuge x y
+instance (Sign s, Width w) => Num (BV s w) where
+  fromInteger n = BV (bvBin (width (undefined :: w)) n)
+  BV x + BV y = BV (bvAdd x y)
+  BV x - BV y = BV (bvSub x y)
+  BV x * BV y = BV (bvMul x y)
+  negate (BV x) = BV (bvNeg x)
+  abs x = BV (ite (x .<. 0) (unBV (negate x)) (unBV x))
+  signum = smtSignum
+
+instance (Sign s, Width w) => SMTOrd (BV s w) where
+  x .<. y
+    | isSigned x = bvSLt (unBV x) (unBV y)
+    | otherwise  = bvULt (unBV x) (unBV y)
+  x .<=. y
+    | isSigned x = bvSLeq (unBV x) (unBV y)
+    | otherwise  = bvULeq (unBV x) (unBV y)
+  x .>.  y = y .<.  x
+  x .>=. y = y .<=. x
+
+instance (Sign s, Width w) => Fresh (BV s w) where
+  fresh = freshSExpr
+
+instance (Sign s, Width w) => TypedSExpr (BV s w) where
+  smtType _ = tBits (width (undefined :: w))
+  toSMT = unBV
+  fromSMT = BV
+
+newtype Rat = Rat { unRat :: SExpr }
+  deriving (Eq, Ord, Typeable)
+instance Show Rat where
+  show (Rat x) = show x
+
+instance Fresh Rat where
+  fresh = freshSExpr
+instance TypedSExpr Rat where
+  smtType _ = tReal
+  toSMT = unRat
+  fromSMT = Rat
+
+instance Num Rat where
+  fromInteger = Rat . real . fromInteger
+  Rat x + Rat y = Rat (add x y)
+  Rat x - Rat y = Rat (sub x y)
+  Rat x * Rat y = Rat (mul x y)
+  negate (Rat x) = Rat (neg x)
+  abs (Rat x) = Rat (SMT.abs x)
+  signum = smtSignum
+
+instance Fractional Rat where
+  Rat x / Rat y = Rat (realDiv x y)
+  fromRational = Rat . real
+
+instance SMTOrd Rat where
+  Rat x .<.  Rat y = lt  x y
+  Rat x .<=. Rat y = leq x y
+  Rat x .>.  Rat y = gt  x y
+  Rat x .>=. Rat y = geq x y
+
+smtSignum :: (Num a, SMTOrd a, TypedSExpr a) => a -> a
+smtSignum (x :: a) =
+  fromSMT $
+    ite (x .<. 0) (toSMT (-1 :: a)) $
+    ite (x .>. 0) (toSMT  (1 :: a))
+    (toSMT (0 :: a))
