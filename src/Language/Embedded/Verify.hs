@@ -477,8 +477,7 @@ instance (SMTValue a, Show a) => ShowModel (SMT.SMTExpr a) where
 
 -- A normal variable binding.
 newtype ValBinding exp a = ValBinding (SMTExpr exp a)
-  deriving (Show, Typeable)
-deriving instance SMTEval exp a => Eq (ValBinding exp a)
+  deriving (Eq, Show, Typeable)
 deriving instance SMTEval exp a => Mergeable (ValBinding exp a)
 deriving instance SMTEval exp a => ShowModel (ValBinding exp a)
 instance SMTEval exp a => Fresh (ValBinding exp a) where
@@ -493,11 +492,8 @@ data RefBinding exp a =
     rb_value       :: SMTExpr exp a,
     rb_initialised :: Formula,
     rb_writable    :: Formula }
-  deriving (Show, Typeable)
+  deriving (Eq, Show, Typeable)
 
-instance SMTEval exp a => Eq (RefBinding exp a) where
-  RefBinding v1 i1 w1 == RefBinding v2 i2 w2 =
-    (v1, i1, w1) == (v2, i2, w2)
 instance SMTEval exp a => Mergeable (RefBinding exp a) where
   merge cond (RefBinding v1 i1 w1) (RefBinding v2 i2 w2) =
     RefBinding (merge cond v1 v2) (merge cond i1 i2) (merge cond w1 w2)
@@ -525,8 +521,7 @@ data ArrBinding exp i a =
   ArrBinding {
     arr_value :: SMT.SMTExpr (SMTArray (SMT.SMTExpr (SMTType exp i)) (SMTType exp a)),
     arr_bound :: SMTExpr exp i }
-  deriving (Typeable, Show)
-deriving instance (SMTEval exp a, SMTEval exp i) => Eq (ArrBinding exp i a)
+  deriving (Eq, Typeable, Show)
 instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a) where
   merge cond (ArrBinding v1 b1) (ArrBinding v2 b2) =
     ArrBinding (merge cond v1 v2) (merge cond b1 b2)
