@@ -661,10 +661,12 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
         ys :: [SMTExpr exp a]
         ys = map fromConstant xs
 
-        op (n, x) arr = store arr (toSMT n) (toSMT x)
         n = fromIntegral (length xs)
-      val' <- shareSMT (foldr op val (zip is ys))
-      poke name (ArrBinding val' n :: ArrBinding exp i a)
+
+      forM_ (zip is ys) $ \(i, x) ->
+        assume (select val (toSMT n) SMT..==. toSMT x)
+
+      poke name (ArrBinding val n :: ArrBinding exp i a)
 
   verifyInstr instr@(GetArr ix (ArrComp arrName :: Arr i a)) (ValComp valName)
     | Dict <- witnessPred (undefined :: exp i) =
