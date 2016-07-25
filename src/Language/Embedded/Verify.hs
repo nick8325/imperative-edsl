@@ -605,11 +605,18 @@ producesValue instr (ValComp name :: Val a) =
 
 instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr FileCMD exp pred where
   verifyInstr instr@FGet{} val = producesValue instr val
+  verifyInstr instr@(FPrintf _ _ as) _ = do
+    let
+      evalArg :: PrintfArg exp pred -> Verify ()
+      evalArg (PrintfArg (exp :: exp a)) =
+        case witnessPred (undefined :: exp a) of
+          Dict -> void (eval exp)
+    mapM_ evalArg as
+    return instr
   verifyInstr instr _ = return instr
 
 instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr C_CMD exp pred where
-  verifyInstr instr@CallFun{} val = producesValue instr val
-  verifyInstr instr _ = return instr
+  verifyInstr = error "Don't know how to verify C_CMD"
 
 instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr RefCMD exp pred where
   verifyInstr instr@NewRef{} ref@(RefComp name :: Ref a) =
