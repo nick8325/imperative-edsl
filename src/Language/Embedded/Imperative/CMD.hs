@@ -282,6 +282,7 @@ data ControlCMD fs a
     For    :: (pred i, Integral i) => IxRange (exp i) -> (Val i -> prog ()) -> ControlCMD (Param3 prog exp pred) ()
     Break  :: ControlCMD (Param3 prog exp pred) ()
     Assert :: exp Bool -> String -> ControlCMD (Param3 prog exp pred) ()
+    Hint   :: pred a => exp a -> ControlCMD (Param3 prog exp pred) ()
 
 instance HFunctor ControlCMD
   where
@@ -290,6 +291,7 @@ instance HFunctor ControlCMD
     hfmap f (For rng body)    = For rng (f . body)
     hfmap _ Break             = Break
     hfmap _ (Assert cond msg) = Assert cond msg
+    hfmap _ (Hint exp)        = Hint exp
 
 instance HBifunctor ControlCMD
   where
@@ -298,6 +300,7 @@ instance HBifunctor ControlCMD
     hbimap f g (For (lo,step,hi) body) = For (g lo, step, fmap g hi) (f . body)
     hbimap _ _ Break                   = Break
     hbimap _ g (Assert cond msg)       = Assert (g cond) msg
+    hbimap _ g (Hint exp)              = Hint (g exp)
 
 instance (ControlCMD :<: instr) => Reexpressible ControlCMD instr env
   where
@@ -316,6 +319,7 @@ instance (ControlCMD :<: instr) => Reexpressible ControlCMD instr env
             For (lo',step,hi') (flip runReaderT env . body)
     reexpressInstrEnv reexp Break             = lift $ singleInj Break
     reexpressInstrEnv reexp (Assert cond msg) = lift . singleInj . flip Assert msg =<< reexp cond
+    reexpressInstrEnv reexp (Hint exp)        = lift . singleInj . Hint =<< reexp exp
 
 instance DryInterp ControlCMD
   where
@@ -324,6 +328,7 @@ instance DryInterp ControlCMD
     dryInterp (For _ _)    = return ()
     dryInterp Break        = return ()
     dryInterp (Assert _ _) = return ()
+    dryInterp (Hint _)     = return ()
 
 
 
@@ -744,6 +749,7 @@ runControlCMD Break = error "cannot run programs involving break"
 runControlCMD (Assert cond msg) = do
     cond' <- cond
     unless cond' $ error $ "Assertion failed: " ++ msg
+runControlCMD (Hint _) = return ()
 
 runPtrCMD :: PtrCMD (Param3 IO IO pred) a -> IO a
 runPtrCMD (SwapPtr a b) = runSwapPtr a b

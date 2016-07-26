@@ -141,6 +141,7 @@ data ControlCMD fs a where
   Break  :: ControlCMD (Param3 prog exp pred) ()
   -- The assertion turns into Nothing if it's proved
   Assert :: Maybe (exp Bool) -> String -> ControlCMD (Param3 prog exp pred) ()
+  Hint   :: pred a => exp a -> ControlCMD (Param3 prog exp pred) ()
 
 instance HFunctor ControlCMD where
   hfmap f instr = runIdentity (htraverse (pure . f) instr)
@@ -151,6 +152,7 @@ instance HTraversable ControlCMD where
   htraverse f (For range x body) = fmap (For range x) (f body)
   htraverse _ Break = pure Break
   htraverse _ (Assert cond msg) = pure (Assert cond msg)
+  htraverse _ (Hint exp) = pure (Hint exp)
 
 instance Defunctionalise CMD.ControlCMD where
   type FirstOrder CMD.ControlCMD = ControlCMD
@@ -161,6 +163,7 @@ instance Defunctionalise CMD.ControlCMD where
     return (For range i (body i))
   defuncInstr CMD.Break = return Break
   defuncInstr (CMD.Assert cond msg) = return (Assert (Just cond) msg)
+  defuncInstr (CMD.Hint exp) = return (Hint exp)
 
 instance Patch CMD.ControlCMD where
   patchInstr (Assert Nothing _) (CMD.Assert _ _) = return ()
@@ -175,3 +178,5 @@ instance Patch CMD.ControlCMD where
     singleInj CMD.Break
   patchInstr (Assert _ _) (CMD.Assert cond msg) =
     singleInj (CMD.Assert cond msg)
+  patchInstr (Hint _) (CMD.Hint exp) =
+    singleInj (CMD.Hint exp)

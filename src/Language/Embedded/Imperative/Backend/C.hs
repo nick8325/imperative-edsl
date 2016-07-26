@@ -170,6 +170,7 @@ compControlCMD (Assert cond msg) = do
     addInclude "<assert.h>"
     c <- compExp cond
     addStm [cstm| assert($c && $msg); |]
+compControlCMD (Hint _) = return ()
 
 compPtrCMD :: PtrCMD (Param3 prog exp pred) a -> CGen a
 compPtrCMD (SwapPtr a b) = do
