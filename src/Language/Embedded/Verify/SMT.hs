@@ -5,7 +5,7 @@ module Language.Embedded.Verify.SMT(
 
 import Control.Monad.State.Strict
 import qualified SimpleSMT as SMT
-import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, ite, eq, tBool, tInt, tArray, tBits, tReal, select, store, bvBin, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv)
+import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, ite, eq, tBool, tInt, tArray, tBits, tReal, select, store, bvBin, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv, int, newLogger)
 import Control.Applicative
 
 type SMT = StateT SMTState IO
@@ -75,3 +75,20 @@ check = withSolver $ \solver ->
 declare :: String -> SExpr -> SMT SExpr
 declare name ty = withSolver $ \solver ->
   lift (SMT.declare solver name ty)
+
+showSExpr :: SExpr -> String
+showSExpr exp = SMT.showsSExpr exp ""
+
+showValue :: Value -> String
+showValue (Bool x)   = show x
+showValue (Int x)    = show x
+showValue (Real x)   = show x
+showValue (Bits _ x) = show x
+showValue (Other x)  = showSExpr x
+
+getArray :: Value -> SExpr -> SMT [Value]
+getArray n arr =
+  sequence [ getExpr (select arr i) | i <- indexes n ]
+  where
+    indexes (Int n) = map int [0..n-1]
+    indexes (Bits w n) = map (bvBin w) [0..n-1]

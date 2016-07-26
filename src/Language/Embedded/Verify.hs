@@ -111,14 +111,14 @@ trace kind p = chat $ do
   branch <- branch
 
   liftIO $ do
-    putStr (kind ++ " " ++ show p)
+    putStr (kind ++ " " ++ showSExpr p)
     case branch of
       [] -> putStrLn ""
       [x] -> do
-        putStrLn (" assuming " ++ show x)
+        putStrLn (" assuming " ++ showSExpr x)
       _ -> do
         putStrLn " assuming:"
-        sequence_ [ putStrLn ("  " ++ show x) | x <- branch ]
+        sequence_ [ putStrLn ("  " ++ showSExpr x) | x <- branch ]
 
 -- Run a computation but undo its effects afterwards.
 stack :: Verify a -> Verify a
@@ -319,7 +319,7 @@ class Fresh a where
 
 freshVar name ty = do
   n <- lift freshNum
-  lift $ declare (name ++ show n) ty
+  lift $ declare (name ++ "." ++ show n) ty
 
 -- A typeclass for values that can undergo predicate abstraction.
 class (Ord (Literal a), Typeable (Literal a), Show (Literal a), Fresh a) => Invariant a where
@@ -414,7 +414,7 @@ instance ShowModel Entry where
 instance ShowModel SExpr where
   showModel x = do
     val <- lift (getExpr x)
-    return (show val)
+    return (showValue val)
 
 ----------------------------------------------------------------------
 -- The different bindings that are stored in the context.
@@ -512,8 +512,11 @@ data ArrBinding exp i a =
 instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a) where
   merge cond (ArrBinding v1 b1) (ArrBinding v2 b2) =
     ArrBinding (merge cond v1 v2) (merge cond b1 b2)
-instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrBinding exp i a) where
-  showModel _ = return "<array>"
+instance (SMTEval exp a, SMTEval exp i, Pred exp i, Num i) => ShowModel (ArrBinding exp i a) where
+  showModel arr = do
+    bound <- lift $ getExpr (toSMT (arr_bound arr))
+    vals  <- lift $ getArray bound (toSMT (arr_value arr))
+    return ("{" ++ intercalate ", " (map showValue vals) ++ "}")
 instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrBinding exp i a) where
   fresh name = do
     arr   <- fresh name
