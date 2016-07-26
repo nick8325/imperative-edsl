@@ -282,6 +282,9 @@ class SMTOrd a where
 instance SMTEval exp a => Eq (SMTExpr exp a) where
   x == y = toSMT x == toSMT y
 
+instance SMTEval exp a => Ord (SMTExpr exp a) where
+  compare = comparing toSMT
+
 instance SMTEval exp a => Show (SMTExpr exp a) where
   showsPrec n x = showsPrec n (toSMT x)
 

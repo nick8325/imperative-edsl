@@ -40,6 +40,35 @@ instance (Sign s, Width w) => Num (BV s w) where
   abs = smtAbs
   signum = smtSignum
 
+instance Enum (BV s w) where
+  toEnum   = error "no Enum for BV"
+  fromEnum = error "no Enum for BV"
+instance (Sign s, Width w) => Real (BV s w) where
+  toRational = error "no toRational for BV"
+instance (Sign s, Width w) => Integral (BV s w) where
+  toInteger = error "no toInteger for BV"
+  n0@(BV n) `quotRem` BV d
+    | isSigned n0 = (BV (bvSDiv n d), BV (bvSRem n d))
+    | otherwise   = (BV (bvUDiv n d), BV (bvURem n d))
+
+-- A slightly lighter version of Data.Bits.
+class Bits a where
+  (.&.), (.|.) :: a -> a -> a
+  complement :: a -> a
+  xor :: a -> a -> a
+  shiftL :: a -> a -> a
+  shiftR :: a -> a -> a
+
+instance (Sign s, Width w) => Bits (BV s w) where
+  BV x .&. BV y = BV (bvAnd x y)
+  BV x .|. BV y = BV (bvOr x y)
+  complement (BV x) = BV (bvNot x)
+  BV x `xor` BV y = BV (bvXOr x y)
+  shiftL (BV x) (BV n) = BV (bvShl x n)
+  shiftR x0@(BV x) (BV n)
+    | isSigned x0 = BV (bvAShr x n)
+    | otherwise   = BV (bvLShr x n)
+
 instance (Sign s, Width w) => SMTOrd (BV s w) where
   x .<. y
     | isSigned x = bvSLt (unBV x) (unBV y)

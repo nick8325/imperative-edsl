@@ -5,7 +5,7 @@ module Language.Embedded.Verify.SMT(
 
 import Control.Monad.State.Strict
 import qualified SimpleSMT as SMT
-import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, ite, eq, tBool, tInt, tArray, tBits, tReal, select, store, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv, int, newLogger)
+import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, fam, ite, eq, tBool, tInt, tArray, tBits, tReal, select, store, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, bvAnd, bvOr, bvNot, bvXOr, bvShl, bvAShr, bvLShr, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv, int, newLogger)
 import Control.Applicative
 
 type SMT = StateT SMTState IO
