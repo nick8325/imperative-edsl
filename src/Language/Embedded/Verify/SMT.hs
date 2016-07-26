@@ -76,6 +76,10 @@ declare :: String -> SExpr -> SMT SExpr
 declare name ty = withSolver $ \solver ->
   lift (SMT.declare solver name ty)
 
+declareFun :: String -> [SExpr] -> SExpr -> SMT SExpr
+declareFun name args res = withSolver $ \solver ->
+  lift (SMT.declareFun solver name args res)
+
 showSExpr :: SExpr -> String
 showSExpr exp = SMT.showsSExpr exp ""
 

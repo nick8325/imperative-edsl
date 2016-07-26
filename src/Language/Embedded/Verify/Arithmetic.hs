@@ -37,7 +37,7 @@ instance (Sign s, Width w) => Num (BV s w) where
   BV x - BV y = BV (bvSub x y)
   BV x * BV y = BV (bvMul x y)
   negate (BV x) = BV (bvNeg x)
-  abs x = BV (ite (x .<. 0) (unBV (negate x)) (unBV x))
+  abs = smtAbs
   signum = smtSignum
 
 instance (Sign s, Width w) => SMTOrd (BV s w) where
@@ -88,6 +88,10 @@ instance SMTOrd Rat where
   Rat x .<=. Rat y = leq x y
   Rat x .>.  Rat y = gt  x y
   Rat x .>=. Rat y = geq x y
+
+smtAbs :: (Num a, SMTOrd a, TypedSExpr a) => a -> a
+smtAbs (x :: a) =
+  fromSMT (ite (x .<. 0) (toSMT (negate x)) (toSMT x))
 
 smtSignum :: (Num a, SMTOrd a, TypedSExpr a) => a -> a
 smtSignum (x :: a) =
