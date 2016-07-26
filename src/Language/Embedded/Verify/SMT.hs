@@ -5,7 +5,7 @@ module Language.Embedded.Verify.SMT(
 
 import Control.Monad.State.Strict
 import qualified SimpleSMT as SMT
-import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, ite, eq, tBool, tInt, tArray, tBits, tReal, select, store, bvBin, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv, int, newLogger)
+import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, ite, eq, tBool, tInt, tArray, tBits, tReal, select, store, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv, int, newLogger)
 import Control.Applicative
 
 type SMT = StateT SMTState IO
@@ -91,4 +91,10 @@ getArray n arr =
   sequence [ getExpr (select arr i) | i <- indexes n ]
   where
     indexes (Int n) = map int [0..n-1]
-    indexes (Bits w n) = map (bvBin w) [0..n-1]
+    indexes (Bits w n) = map (bits w) [0..n-1]
+
+bits :: Int -> Integer -> SExpr
+bits w n =
+  List [Atom "_", Atom ("bv" ++ show m), int (fromIntegral w)]
+  where
+    m = n `mod` (2^w)

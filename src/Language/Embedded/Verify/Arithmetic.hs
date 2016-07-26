@@ -32,7 +32,7 @@ instance Show (BV s a) where
   show (BV x) = show x
 
 instance (Sign s, Width w) => Num (BV s w) where
-  fromInteger n = BV (bvBin (width (undefined :: w)) n)
+  fromInteger n = BV (bits (width (undefined :: w)) n)
   BV x + BV y = BV (bvAdd x y)
   BV x - BV y = BV (bvSub x y)
   BV x * BV y = BV (bvMul x y)
