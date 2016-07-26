@@ -266,9 +266,6 @@ class (SMTEval1 exp, TypedSExpr (SMTExpr exp a), Typeable a) => SMTEval exp a wh
 
   witnessOrd :: Ord a => exp a -> Dict (SMTOrd (SMTExpr exp a))
   witnessOrd = error "witnessOrd"
-  
-  witnessIntegral :: Integral a => exp a -> Dict (Num (SMTExpr exp a))
-  witnessIntegral = error "witnessIntegral"
 
 class Fresh a => TypedSExpr a where
   smtType :: a -> SExpr
@@ -610,7 +607,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
 
   verifyInstr instr@(InitArr _ xs) arr@(ArrComp name :: Arr i a)
     | Dict <- witnessPred (undefined :: exp i),
-      Dict <- witnessIntegral (undefined :: exp i) =
+      Dict <- witnessNum (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
       val <- fresh name
       let
@@ -715,7 +712,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
     return (While cond' body')
   verifyInstr (For range@(lo, step, hi) val@(ValComp name :: Val a) body) ()
     | Dict <- witnessPred (undefined :: exp a),
-      Dict <- witnessIntegral (undefined :: exp a),
+      Dict <- witnessNum (undefined :: exp a),
       Dict <- witnessOrd (undefined :: exp a) = do
       let
         cond = do
