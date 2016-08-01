@@ -27,6 +27,7 @@ import Data.IORef
 import Data.Ix (Ix)
 import Data.Maybe (fromMaybe)
 
+import Control.Monads
 import Language.Embedded.Expression
 import Language.Embedded.Traversal
 import Language.Embedded.Imperative.CMD
@@ -262,5 +263,17 @@ instance FreeExp IO
     constExp = return
     varExp   = error "varExp: unimplemented over IO"
 
-instance DryInterp ChanCMD
-instance DryInterp ThreadCMD
+instance DryInterp ChanCMD where
+  dryInterp NewChan{}   = liftM ChanComp $ freshStr "c"
+  dryInterp CloseChan{} = return ()
+  dryInterp ReadOK{}    = liftM ValComp $ freshStr "v"
+  dryInterp ReadOne{}   = liftM ValComp $ freshStr "v"
+  dryInterp WriteOne{}  = liftM ValComp $ freshStr "v"
+  dryInterp ReadChan{}  = liftM ValComp $ freshStr "v"
+  dryInterp WriteChan{} = liftM ValComp $ freshStr "v"
+
+instance DryInterp ThreadCMD where
+  dryInterp ForkWithId{} = liftM TIDComp $ freshStr "t"
+  dryInterp Kill{}       = return ()
+  dryInterp Wait{}       = return ()
+  dryInterp Sleep{}      = return ()
