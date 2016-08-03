@@ -156,13 +156,13 @@ branch :: Verify [SExpr]
 branch = asks fst
 
 -- Read the context.
-peek :: (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Equalise a, Invariant a) => String -> Verify a
+peek :: (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => String -> Verify a
 peek name = do
   ctx <- get
   return (lookupContext name ctx)
 
 -- Write to the context.
-poke :: (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Equalise a, Invariant a) => String -> a -> Verify ()
+poke :: (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => String -> a -> Verify ()
 poke name val = modify (insertContext name val)
 
 -- Record that execution has broken here.
@@ -347,7 +347,7 @@ class (IsLiteral (Literal a), Fresh a) => Invariant a where
 class (Ord a, Typeable a, Show a) => IsLiteral a where
   -- Evaluate a literal.
   smtLit :: Context -> a -> SExpr
-  smtLit _ _ = error "smtLit not defined"
+  smtLit = error "smtLit not defined"
 
 data HintBody =
   HintBody {
@@ -365,20 +365,37 @@ instance Show Hint where show = show . hint_body
 
 instance IsLiteral Hint where
   smtLit ctx hint =
-    subst (equalise (hint_ctx hint) ctx) (hb_exp (hint_body hint))
+    subst (hb_exp (hint_body hint))
     where
-      subst sub x
-        | Just y <- lookup x sub = y
-      subst _   (Atom xs) = Atom xs
-      subst sub (List xs) = List (map (subst sub) xs)
+      subst x | Just y <- lookup x sub = y
+      subst (Atom xs) = Atom xs
+      subst (List xs) = List (map subst xs)
+
+      sub = equalise (hint_ctx hint) ctx
+
+      equalise ctx1 ctx2 =
+        zip (exprs (fmap fst m)) (exprs (fmap snd m))
+        where
+          m = Map.intersectionWith (,) ctx1 ctx2
+
+-- A typeclass for values that contain SMT expressions.
+class Exprs a where
+  -- List SMT expressions contained inside a value.
+  exprs :: a -> [SExpr]
+
+instance Exprs Entry where
+  exprs (Entry x) = exprs x
+
+instance Exprs Context where
+  exprs = concatMap exprs . Map.elems
 
 ----------------------------------------------------------------------
 -- The context.
 ----------------------------------------------------------------------
 
 type Context = Map Name Entry
-data Name  = forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Equalise a, Invariant a) => Name String a
-data Entry = forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Equalise a, Invariant a) => Entry a
+data Name  = forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => Name String a
+data Entry = forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => Entry a
 
 instance Eq Name where x == y = compare x y == EQ
 instance Ord Name where
@@ -395,7 +412,7 @@ instance Show Entry where
   showsPrec n (Entry x) = showsPrec n x
 
 -- Look up a value in the context.
-lookupContext :: forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Equalise a, Invariant a) => String -> Context -> a
+lookupContext :: forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => String -> Context -> a
 lookupContext name ctx =
   case Map.lookup (Name name (undefined :: a)) ctx of
     Nothing -> error ("variable " ++ name ++ " not found in context")
@@ -405,7 +422,7 @@ lookupContext name ctx =
         Just x  -> x
 
 -- Add a value to the context or modify an existing binding.
-insertContext :: forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Equalise a, Invariant a) => String -> a -> Context -> Context
+insertContext :: forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => String -> a -> Context -> Context
 insertContext name x ctx = Map.insert (Name name (undefined :: a)) (Entry x) ctx
 
 -- modified ctx1 ctx2 returns a subset of ctx2 that contains
@@ -457,20 +474,6 @@ instance ShowModel SExpr where
     val <- lift (getExpr x)
     return (showValue val)
 
--- A typeclass for values that can be made equal.
-class Equalise a where
-  equalise :: a -> a -> [(SExpr, SExpr)]
-
-instance Equalise Context where
-  equalise ctx1 ctx2 =
-    concat (Map.elems (Map.intersectionWith equalise ctx1 ctx2))
-
-instance Equalise Entry where
-  equalise (Entry x) (Entry y) =
-    case cast y of
-      Just y  -> equalise x y
-      Nothing -> error "type mismatch"
-
 ----------------------------------------------------------------------
 -- The different bindings that are stored in the context.
 ----------------------------------------------------------------------
@@ -495,10 +498,9 @@ instance SMTEval exp a => Invariant (ValBinding exp a) where
   data Literal (ValBinding exp a) = LitVB
     deriving (Eq, Ord, Show, Typeable)
   havoc name = error ("immutable binding " ++ name ++ " rebound")
-instance SMTEval exp a => Equalise (ValBinding exp a) where
-  equalise x y =
-    [(toSMT (vb_value x), toSMT (vb_value y))]
 instance SMTEval exp a => IsLiteral (Literal (ValBinding exp a))
+instance SMTEval exp a => Exprs (ValBinding exp a) where
+  exprs val = [toSMT (vb_value val)]
 
 peekVal :: forall exp a. SMTEval exp a => String -> Verify (SMTExpr exp a)
 peekVal name = do
@@ -537,13 +539,11 @@ instance SMTEval exp a => Invariant (RefBinding exp a) where
     deriving (Eq, Ord, Show, Typeable)
 
   literals name _ = [RefInitialised name]
-instance SMTEval exp a => Equalise (RefBinding exp a) where
-  equalise x y =
-    [(toSMT (rb_value x), toSMT (rb_value y)),
-     (rb_initialised x, rb_initialised y)]
 instance SMTEval exp a => IsLiteral (Literal (RefBinding exp a)) where
   smtLit ctx (RefInitialised name) =
     rb_initialised (lookupContext name ctx :: RefBinding exp a)
+instance SMTEval exp a => Exprs (RefBinding exp a) where
+  exprs ref = [toSMT (rb_value ref), rb_initialised ref]
 
 newRef :: SMTEval exp a => String -> exp a -> Verify ()
 newRef name (_ :: exp a) = do
@@ -589,14 +589,12 @@ instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrBinding exp i a) where
 instance (SMTEval exp a, SMTEval exp i) => Invariant (ArrBinding exp i a) where
   data Literal (ArrBinding exp i a) = LitAB
     deriving Typeable
-instance (SMTEval exp a, SMTEval exp i) => Equalise (ArrBinding exp i a) where
-  equalise x y =
-    equalise (arr_value x) (arr_value y) ++
-    [(toSMT (arr_bound x), toSMT (arr_bound y))]
 instance (SMTEval exp a, SMTEval exp i) => IsLiteral (Literal (ArrBinding exp i a))
 deriving instance SMTEval exp a => Eq   (Literal (ArrBinding exp i a))
 deriving instance SMTEval exp a => Ord  (Literal (ArrBinding exp i a))
 deriving instance SMTEval exp a => Show (Literal (ArrBinding exp i a))
+instance (SMTEval exp a, SMTEval exp i) => Exprs (ArrBinding exp i a) where
+  exprs arr = [toSMT (arr_value arr), toSMT (arr_bound arr)]
 
 -- A wrapper to help with fresh name generation.
 newtype SMTArray exp i a = SMTArray SExpr deriving (Eq, Ord, Show, Mergeable)
@@ -606,8 +604,6 @@ instance (SMTEval exp a, SMTEval exp i) => TypedSExpr (SMTArray exp i a) where
   smtType _ = tArray (smtType (undefined :: SMTExpr exp i)) (smtType (undefined :: SMTExpr exp a))
   toSMT (SMTArray arr) = arr
   fromSMT = SMTArray
-instance Equalise (SMTArray exp i a) where
-  equalise (SMTArray x) (SMTArray y) = [(x, y)]
 
 ----------------------------------------------------------------------
 -- Instances for the standard non-control flow command datatypes.
