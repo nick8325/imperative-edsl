@@ -346,7 +346,9 @@ class (IsLiteral (Literal a), Fresh a) => Invariant a where
 
 class (Ord a, Typeable a, Show a) => IsLiteral a where
   -- Evaluate a literal.
-  smtLit :: Context -> a -> SExpr
+  -- The two context arguments are the old and new contexts
+  -- (on entry to the loop and now).
+  smtLit :: Context -> Context -> a -> SExpr
   smtLit = error "smtLit not defined"
 
 data HintBody =
@@ -364,7 +366,7 @@ data Hint =
 instance Show Hint where show = show . hint_body
 
 instance IsLiteral Hint where
-  smtLit ctx hint =
+  smtLit _ ctx hint =
     subst (hb_exp (hint_body hint))
     where
       subst x | Just y <- lookup x sub = y
@@ -535,13 +537,20 @@ instance SMTEval exp a => Fresh (RefBinding exp a) where
     return (RefBinding value init)
 instance SMTEval exp a => Invariant (RefBinding exp a) where
   data Literal (RefBinding exp a) =
-    RefInitialised String
+      RefInitialised String
+    | RefUnchanged String
     deriving (Eq, Ord, Show, Typeable)
 
-  literals name _ = [RefInitialised name]
+  literals name _ = [RefInitialised name, RefUnchanged name]
 instance SMTEval exp a => IsLiteral (Literal (RefBinding exp a)) where
-  smtLit ctx (RefInitialised name) =
+  smtLit _ ctx (RefInitialised name) =
     rb_initialised (lookupContext name ctx :: RefBinding exp a)
+  smtLit old new (RefUnchanged name) =
+    toSMT (rb_value x) `eq` toSMT (rb_value y)
+    where
+      x, y :: RefBinding exp a
+      x = lookupContext name old
+      y = lookupContext name new
 instance SMTEval exp a => Exprs (RefBinding exp a) where
   exprs ref = [toSMT (rb_value ref), rb_initialised ref]
 
@@ -836,7 +845,8 @@ instance Show SomeLiteral where show (SomeLiteral x) = show x
 discoverInvariant :: Verify () -> Verify (Verify ())
 discoverInvariant body = do
   (frame, hints) <- findFrameAndHints
-  abstract frame hints >>= refine frame hints
+  ctx <- get
+  abstract ctx frame hints >>= refine frame hints
   where
     -- Suppose we have a while-loop while(E) S, and we know a formula
     -- I(0) which describes the initial state of the loop.
@@ -913,10 +923,11 @@ discoverInvariant body = do
         [ Hint before hint | hint <- hints ])
 
     refine frame hints clauses = do
+      ctx <- get
       clauses' <- stack $ quietly $ noWarn $ do
         assumeLiterals frame clauses
         noBreak (breaks body) >>= assume . SMT.not
-        fmap (disjunction clauses) (chattily (abstract frame hints))
+        fmap (disjunction clauses) (chattily (abstract ctx frame hints))
 
       if clauses == clauses' then do
         assumeLiterals frame clauses
@@ -929,15 +940,15 @@ discoverInvariant body = do
       forM_ frame $ \(Name name (_ :: a)) -> do
         val <- peek name >>= havoc name
         poke name (val :: a)
-      mapM_ (evalClause >=> assume) clauses
+      mapM_ (evalClause ctx >=> assume) clauses
 
-    evalClause clause = do
+    evalClause old clause = do
       ctx <- get
-      return (disj [ smtLit ctx lit | SomeLiteral lit <- clause ])
+      return (disj [ smtLit old ctx lit | SomeLiteral lit <- clause ])
 
-    abstract frame hints = fmap (usort . map usort) $ do
+    abstract old frame hints = fmap (usort . map usort) $ do
       ctx <- get
-      res <- quietly $ Abstract.abstract (evalClause >=> provable "invariant") (lits frame)
+      res <- quietly $ Abstract.abstract (evalClause old >=> provable "invariant") (lits frame)
       chat $ liftIO $
         case res of
           [] -> putStrLn ("No invariant found over frame " ++ show frame)
