@@ -73,6 +73,13 @@ assert :: SExpr -> SMT ()
 assert expr = withSolver $ \solver ->
   lift (SMT.assert solver expr)
 
+simplify :: SExpr -> SMT SExpr
+simplify expr = withSolver $ \solver ->
+  lift (SMT.command solver (fun "simplify" [expr]))
+
+assertSimp :: SExpr -> SMT ()
+assertSimp expr = simplify expr >>= assert
+
 check :: SMT Result
 check = withSolver $ \solver ->
   lift (SMT.check solver)

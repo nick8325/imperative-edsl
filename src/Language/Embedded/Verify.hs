@@ -111,7 +111,8 @@ provable msg p = do
 -- Print a formula for debugging purposes.
 trace :: String -> SExpr -> Verify ()
 trace kind p = chat $ do
-  branch <- branch
+  branch <- branch >>= mapM (lift . simplify)
+  p <- lift $ simplify p
 
   liftIO $ do
     putStr (kind ++ " " ++ showSExpr p)
