@@ -5,7 +5,7 @@ module Language.Embedded.Verify.SMT(
 
 import Control.Monad.State.Strict
 import qualified SimpleSMT as SMT
-import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, fam, ite, eq, tBool, tInt, tArray, tBits, tReal, select, store, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, bvAnd, bvOr, bvNot, bvXOr, bvShl, bvAShr, bvLShr, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv, int, newLogger)
+import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, fam, ite, tBool, tInt, tArray, tBits, tReal, select, store, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, bvAnd, bvOr, bvNot, bvXOr, bvShl, bvAShr, bvLShr, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv, int, newLogger, implies)
 import Control.Applicative
 
 type SMT = StateT SMTState IO
@@ -55,6 +55,11 @@ disj xs = fun "or" xs
 (.||.), (.&&.) :: SExpr -> SExpr -> SExpr
 x .||. y = disj [x, y]
 x .&&. y = conj [x, y]
+
+eq :: SExpr -> SExpr -> SExpr
+eq x y
+  | x == y = bool True
+  | otherwise = SMT.eq x y
 
 setOption :: String -> String -> SMT ()
 setOption opt val = withSolver $ \solver ->
