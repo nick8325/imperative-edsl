@@ -79,16 +79,15 @@ runVerify m = runZ3 ["-t:1000"] $ do
   return (x, warns)
 
 -- Assume that a given formula is true.
-assume :: SExpr -> Verify ()
-assume p = do
+assume :: String -> SExpr -> Verify ()
+assume msg p = do
   branch <- branch
-  trace "Asserted" p
+  trace msg "Asserted" p
   lift (assert (disj (p:map SMT.not branch)))
 
 -- Check if a given formula holds.
 provable :: String -> SExpr -> Verify Bool
 provable msg p = do
-  chat $ liftIO $ putStrLn ("Check: " ++ msg)
   branch <- branch
   stack $ do
     res <- lift $ do
@@ -98,24 +97,24 @@ provable msg p = do
     chat $
       case res of
         Sat -> stack $ do
-          trace "Failed to prove" p
+          trace msg "Failed to prove" p
           lift $ setOption ":produce-models" "true"
           lift $ check
           context <- get
           model   <- showModel context
           liftIO $ putStrLn ("  (countermodel is " ++ model ++ ")")
-        Unsat   -> trace "Proved" p
-        Unknown -> trace "Couldn't solve" p
+        Unsat   -> trace msg "Proved" p
+        Unknown -> trace msg "Couldn't solve" p
     return (res == Unsat)
 
 -- Print a formula for debugging purposes.
-trace :: String -> SExpr -> Verify ()
-trace kind p = chat $ do
+trace :: String -> String -> SExpr -> Verify ()
+trace msg kind p = chat $ do
   branch <- branch >>= mapM (lift . simplify)
   p <- lift $ simplify p
 
   liftIO $ do
-    putStr (kind ++ " " ++ showSExpr p)
+    putStr (kind ++ " " ++ showSExpr p ++ " (" ++ msg ++ ")")
     case branch of
       [] -> putStrLn ""
       [x] -> do
@@ -313,7 +312,7 @@ instance SMTEval exp a => Fresh (SMTExpr exp a) where
 share :: TypedSExpr a => a -> Verify a
 share exp = do
   x <- fresh "let"
-  assume (x .==. exp)
+  assume "let" (x .==. exp)
   return x
 
 -- A few typed replacements for SMTLib functionality.
@@ -699,7 +698,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
         n = fromIntegral (length xs)
 
       forM_ (zip is ys) $ \(i, x) ->
-        assume (select (toSMT val) (toSMT i) `eq` toSMT x)
+        assume "array initialisation" (select (toSMT val) (toSMT i) `eq` toSMT x)
 
       poke name (ArrBinding val n :: ArrBinding exp i a)
 
@@ -766,7 +765,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
     if res then
       return (Assert Nothing msg)
     else do
-      assume (toSMT b)
+      assume "assertion" (toSMT b)
       hint b
       return (Assert (Just cond) msg)
   verifyInstr instr@(CMD.Hint (exp :: exp a)) () =
@@ -791,7 +790,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
     finished <- discoverInvariant loop
     (cond', body') <- stack $ do
       (cond', res) <- verifyWithResult cond
-      eval res >>= assume . toSMT
+      eval res >>= assume "loop guard" . toSMT
       body' <- verify body
       return (cond', body')
     finished
@@ -821,7 +820,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
       newRef name (undefined :: exp a)
       setRef name m
       finished <- discoverInvariant loop
-      body' <- stack (cond >>= assume >> verify body)
+      body' <- stack (cond >>= assume "loop guard" >> verify body)
       finished
       return (For range val body')
 
@@ -926,12 +925,12 @@ discoverInvariant body = do
       ctx <- get
       clauses' <- stack $ quietly $ noWarn $ do
         assumeLiterals frame clauses
-        noBreak (breaks body) >>= assume . SMT.not
+        noBreak (breaks body) >>= assume "loop not terminated" . SMT.not
         fmap (disjunction clauses) (chattily (abstract ctx frame hints))
 
       if clauses == clauses' then do
         assumeLiterals frame clauses
-        return (noBreak (breaks body) >>= assume)
+        return (noBreak (breaks body) >>= assume "loop terminated")
       else refine frame hints clauses'
 
     assumeLiterals :: [Name] -> [[SomeLiteral]] -> Verify ()
@@ -940,7 +939,7 @@ discoverInvariant body = do
       forM_ frame $ \(Name name (_ :: a)) -> do
         val <- peek name >>= havoc name
         poke name (val :: a)
-      mapM_ (evalClause ctx >=> assume) clauses
+      mapM_ (evalClause ctx >=> assume "invariant") clauses
 
     evalClause old clause = do
       ctx <- get
