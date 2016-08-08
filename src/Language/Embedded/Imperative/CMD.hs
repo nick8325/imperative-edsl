@@ -135,11 +135,11 @@ instance (RefCMD :<: instr) => Reexpressible RefCMD instr env
 
 instance DryInterp RefCMD
   where
-    dryInterp (NewRef base)    = liftM RefComp $ freshStr base
-    dryInterp (InitRef base _) = liftM RefComp $ freshStr base
-    dryInterp (GetRef _)       = liftM ValComp $ freshStr "v"
-    dryInterp (SetRef _ _)     = return ()
-    dryInterp (UnsafeFreezeRef (RefComp v)) = return $ ValComp v
+    dryInterp (NewRef base)       = liftM RefComp $ freshStr base
+    dryInterp (InitRef base _)    = liftM RefComp $ freshStr base
+    dryInterp (GetRef _)          = liftM ValComp $ freshStr "v"
+    dryInterp (SetRef _ _)        = return ()
+    dryInterp (UnsafeFreezeRef _) = liftM ValComp $ freshStr "v"
 
 
 
@@ -232,13 +232,13 @@ instance (ArrCMD :<: instr) => Reexpressible ArrCMD instr env
 
 instance DryInterp ArrCMD
   where
-    dryInterp (NewArr base _)  = liftM ArrComp $ freshStr base
-    dryInterp (InitArr base _) = liftM ArrComp $ freshStr base
-    dryInterp (GetArr _ _)     = liftM ValComp $ freshStr "v"
-    dryInterp (SetArr _ _ _)   = return ()
-    dryInterp (CopyArr _ _ _)  = return ()
-    dryInterp (UnsafeFreezeArr (ArrComp arr)) = return (IArrComp arr)
-    dryInterp (UnsafeThawArr (IArrComp arr))  = return (ArrComp arr)
+    dryInterp (NewArr base _)     = liftM ArrComp $ freshStr base
+    dryInterp (InitArr base _)    = liftM ArrComp $ freshStr base
+    dryInterp (GetArr _ _)        = liftM ValComp $ freshStr "v"
+    dryInterp (SetArr _ _ _)      = return ()
+    dryInterp (CopyArr _ _ _)     = return ()
+    dryInterp (UnsafeFreezeArr _) = liftM IArrComp $ freshStr "ia"
+    dryInterp (UnsafeThawArr _)   = liftM ArrComp $ freshStr "a"
 
 
 
