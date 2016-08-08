@@ -142,7 +142,7 @@ ite p mx my = do
       | otherwise       = local (\(xs, x) -> (p:xs, x))
   (x, ctx1, (break1, warns1, hints1)) <- lift $ runRWST (withBranch p mx) read ctx
   (y, ctx2, (break2, warns2, hints2)) <- lift $ runRWST (withBranch (SMT.not p) my) read ctx
-  put (merge p ctx1 ctx2)
+  mergeContext p ctx1 ctx2 >>= put
   let
     break
       | null break1 && null break2 = []
@@ -311,9 +311,11 @@ instance SMTEval exp a => Fresh (SMTExpr exp a) where
 -- Bind an expression into an SMT variable to increase sharing.
 share :: TypedSExpr a => a -> Verify a
 share exp = do
-  x <- fresh "let"
-  assume "let" (x .==. exp)
-  return x
+  -- x <- fresh "let"
+  -- assume "let" (x .==. exp)
+  -- return x
+  -- XXX need to fix this for hints
+  return exp
 
 -- A few typed replacements for SMTLib functionality.
 (.==.) :: TypedSExpr a => a -> a -> SExpr
@@ -440,8 +442,24 @@ modified ctx1 ctx2 =
 class Mergeable a where
   merge :: SExpr -> a -> a -> a
 
-instance Mergeable Context where
-  merge cond = Map.intersectionWith (merge cond)
+mergeContext :: SExpr -> Context -> Context -> Verify Context
+mergeContext cond ctx1 ctx2 =
+  -- If a variable is bound conditionally, put it in the result
+  -- context, but only define it conditionally.
+  sequence $
+    Map.mergeWithKey
+      (const combine)
+      (fmap (definedWhen cond))
+      (fmap (definedWhen (SMT.not cond)))
+      ctx1 ctx2
+  where
+    combine :: Entry -> Entry -> Maybe (Verify Entry)
+    combine x y = Just (return (merge cond x y))
+
+    definedWhen :: SExpr -> Entry -> Verify Entry
+    definedWhen cond (Entry x) = do
+      y <- fresh "unbound"
+      return (Entry (merge cond x y))
 
 instance Mergeable Entry where
   merge cond (Entry x) (Entry y) =
@@ -486,9 +504,14 @@ data ValBinding exp a =
     vb_ref   :: Maybe String }
   deriving (Eq, Ord, Show, Typeable)
 instance SMTEval exp a => Mergeable (ValBinding exp a) where
-  merge _ x y
-    | x == y = x
-    | otherwise = error "immutable binding bound in two locations"
+  merge cond x y =
+    case (vb_ref x, vb_ref y) of
+      (Just r1, Just r2) | r1 /= r2 ->
+        error "immutable binding bound in two locations"
+      _ ->
+        ValBinding {
+          vb_value = merge cond (vb_value x) (vb_value y),
+          vb_ref   = vb_ref x `mplus` vb_ref y }
 instance SMTEval exp a => ShowModel (ValBinding exp a) where
   showModel = showModel . vb_value
 instance SMTEval exp a => Fresh (ValBinding exp a) where
