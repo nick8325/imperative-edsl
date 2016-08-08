@@ -585,10 +585,9 @@ instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a) where
   merge cond (ArrBinding v1 b1) (ArrBinding v2 b2) =
     ArrBinding (merge cond v1 v2) (merge cond b1 b2)
 instance (SMTEval exp a, SMTEval exp i, Pred exp i, Num i) => ShowModel (ArrBinding exp i a) where
-  showModel arr = do
-    bound <- lift $ getExpr (toSMT (arr_bound arr))
-    vals  <- lift $ getArray bound (toSMT (arr_value arr))
-    return ("{" ++ intercalate ", " (map showValue vals) ++ "}")
+  showModel arr = lift $ do
+    bound <- getExpr (toSMT (arr_bound arr))
+    showArray bound (toSMT (arr_value arr))
 instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrBinding exp i a) where
   fresh name = do
     arr   <- fresh name

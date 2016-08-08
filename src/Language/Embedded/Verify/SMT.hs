@@ -7,6 +7,7 @@ import Control.Monad.State.Strict
 import qualified SimpleSMT as SMT
 import SimpleSMT(SExpr(..), Result(..), Value(..), bool, fun, fam, ite, tBool, tInt, tArray, tBits, tReal, select, store, bvULt, bvULeq, bvSLt, bvSLeq, concat, extract, bvNeg, bvAdd, bvSub, bvMul, bvUDiv, bvURem, bvSDiv, bvSRem, bvAnd, bvOr, bvNot, bvXOr, bvShl, bvAShr, bvLShr, signExtend, zeroExtend, real, add, sub, mul, neg, abs, lt, leq, gt, geq, realDiv, int, newLogger, implies)
 import Control.Applicative
+import Data.List
 
 type SMT = StateT SMTState IO
 data SMTState =
@@ -102,10 +103,16 @@ showValue (Real x)   = show x
 showValue (Bits _ x) = show x
 showValue (Other x)  = showSExpr x
 
-getArray :: Value -> SExpr -> SMT [Value]
-getArray n arr =
-  sequence [ getExpr (select arr i) | i <- indexes n ]
+showArray :: Value -> SExpr -> SMT String
+showArray n arr = do
+  vals <- sequence [ getExpr (select arr i) | i <- take cutoff (indexes n) ]
+  if length (take (cutoff+1) (indexes n)) <= cutoff then
+    return ("{" ++ intercalate ", " (map showValue vals) ++ "}")
+  else
+    return ("{" ++ intercalate ", " (map showValue vals) ++ ", ...}")
   where
+    cutoff :: Int
+    cutoff = 20
     indexes (Int n) = map int [0..n-1]
     indexes (Bits w n) = map (bits w) [0..n-1]
 
