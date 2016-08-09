@@ -17,7 +17,9 @@ data SMTState =
 
 runZ3 :: [String] -> SMT a -> IO a
 runZ3 args m = do
-  solver <- SMT.newSolver "z3" (["-smt2", "-in"] ++ args) Nothing
+  -- logger <- fmap Just (newLogger 0)
+  let logger = Nothing
+  solver <- SMT.newSolver "z3" (["-smt2", "-in"] ++ args) logger
   evalStateT m (SMTState solver 0)
 
 freshNum :: SMT Integer
@@ -90,7 +92,7 @@ declare name ty = withSolver $ \solver ->
   lift (SMT.declare solver name ty)
 
 declareFun :: String -> [SExpr] -> SExpr -> SMT SExpr
-declareFun name args res = withSolver $ \solver ->
+declareFun name args res = withSolver $ \solver -> do
   lift (SMT.declareFun solver name args res)
 
 showSExpr :: SExpr -> String

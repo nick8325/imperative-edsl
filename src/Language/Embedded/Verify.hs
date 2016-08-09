@@ -68,14 +68,15 @@ import qualified Language.Embedded.Verify.SMT as SMT
 --        "chattiness level" (if > 0 then tracing messages are printed)
 -- Write: disjunction which is true if the program has called break;
 --        list of warnings generated;
---        list of hints given
+--        list of hints given;
+--        list of names generated (must not appear in hints)
 -- State: the context, a map from variables to SMT values
-type Verify = RWST ([SExpr], Int) ([SExpr], [String], [HintBody]) Context SMT
+type Verify = RWST ([SExpr], Int) ([SExpr], [String], [HintBody], [String]) Context SMT
 
 runVerify :: Verify a -> IO (a, [String])
 runVerify m = runZ3 ["-t:1000"] $ do
   SMT.setOption ":produce-models" "false"
-  (x, (_, warns, _)) <- evalRWST m ([], 0) Map.empty
+  (x, (_, warns, _, _)) <- evalRWST m ([], 0) Map.empty
   return (x, warns)
 
 -- Assume that a given formula is true.
@@ -140,14 +141,14 @@ ite p mx my = do
       | p == bool True  = local id
       | p == bool False = local (\(_,  x) -> ([p],  x))
       | otherwise       = local (\(xs, x) -> (p:xs, x))
-  (x, ctx1, (break1, warns1, hints1)) <- lift $ runRWST (withBranch p mx) read ctx
-  (y, ctx2, (break2, warns2, hints2)) <- lift $ runRWST (withBranch (SMT.not p) my) read ctx
+  (x, ctx1, (break1, warns1, hints1, decls1)) <- lift $ runRWST (withBranch p mx) read ctx
+  (y, ctx2, (break2, warns2, hints2, decls2)) <- lift $ runRWST (withBranch (SMT.not p) my) read ctx
   mergeContext p ctx1 ctx2 >>= put
   let
     break
       | null break1 && null break2 = []
       | otherwise = [SMT.ite p (disj break1) (disj break2)]
-  tell (break, warns1 ++ warns2, hints1 ++ hints2)
+  tell (break, warns1 ++ warns2, hints1 ++ hints2, decls1 ++ decls2)
   return (x, y)
 
 -- Read the current branch.
@@ -168,12 +169,12 @@ poke name val = modify (insertContext name val)
 break :: Verify ()
 break = do
   branch <- branch
-  tell ([conj branch], [], [])
+  tell ([conj branch], [], [], [])
 
 -- Check if execution of a statement can break.
 withBreaks :: Verify a -> Verify (a, SExpr)
 withBreaks mx = do
-  (x, (exits, _, _)) <- listen mx
+  (x, (exits, _, _, _)) <- listen mx
   return (x, disj exits)
 
 -- Check if execution of a statement can break, discarding the
@@ -183,22 +184,22 @@ breaks mx = fmap snd (withBreaks mx)
 
 -- Prevent a statement from breaking.
 noBreak :: Verify a -> Verify a
-noBreak = censor (\(_, warns, hints) -> ([], warns, hints))
+noBreak = censor (\(_, warns, hints, decls) -> ([], warns, hints, decls))
 
 -- Add a warning to the output.
 warn :: String -> Verify ()
-warn msg = tell ([], [msg], [])
+warn msg = tell ([], [msg], [], [])
 
 -- Add a hint to the output.
 hint :: TypedSExpr a => a -> Verify ()
-hint exp = tell ([], [], [HintBody (toSMT exp) (smtType exp)])
+hint exp = tell ([], [], [HintBody (toSMT exp) (smtType exp)], [])
 
 hintFormula :: SExpr -> Verify ()
-hintFormula exp = tell ([], [], [HintBody exp tBool])
+hintFormula exp = tell ([], [], [HintBody exp tBool],[])
 
 -- Run a computation but ignoring its warnings.
 noWarn :: Verify a -> Verify a
-noWarn = censor (\(breaks, _, hints) -> (breaks, [], hints))
+noWarn = censor (\(breaks, _, hints, decls) -> (breaks, [], hints, decls))
 
 -- Run a computation more chattily.
 chattily :: Verify a -> Verify a
@@ -308,15 +309,6 @@ instance SMTEval exp a => Fresh (SMTExpr exp a) where
   fresh name =
     fmap fromSMT (freshVar name (smtType (undefined :: SMTExpr exp a)))
 
--- Bind an expression into an SMT variable to increase sharing.
-share :: TypedSExpr a => a -> Verify a
-share exp = do
-  -- x <- fresh "let"
-  -- assume "let" (x .==. exp)
-  -- return x
-  -- XXX need to fix this for hints
-  return exp
-
 -- A few typed replacements for SMTLib functionality.
 (.==.) :: TypedSExpr a => a -> a -> SExpr
 x .==. y = toSMT x `eq` toSMT y
@@ -331,7 +323,9 @@ class Fresh a where
 
 freshVar name ty = do
   n <- lift freshNum
-  lift $ declare (name ++ "." ++ show n) ty
+  let x = name ++ "." ++ show n
+  tell ([], [], [], [x])
+  lift $ declare x ty
 
 -- A typeclass for values that can undergo predicate abstraction.
 class (IsLiteral (Literal a), Fresh a) => Invariant a where
@@ -601,13 +595,13 @@ unsafeFreezeRef refName valName (_ :: exp a) = do
 -- An array binding.
 data ArrBinding exp i a =
   ArrBinding {
-    arr_value :: SMTArray exp i a,
-    arr_bound :: SMTExpr exp i }
+    arr_value  :: SMTArray exp i a,
+    arr_bound  :: SMTExpr exp i }
   deriving (Eq, Ord, Typeable, Show)
 instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a) where
   merge cond (ArrBinding v1 b1) (ArrBinding v2 b2) =
     ArrBinding (merge cond v1 v2) (merge cond b1 b2)
-instance (SMTEval exp a, SMTEval exp i, Pred exp i, Num i) => ShowModel (ArrBinding exp i a) where
+instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrBinding exp i a) where
   showModel arr = lift $ do
     bound <- getExpr (toSMT (arr_bound arr))
     showArray bound (toSMT (arr_value arr))
@@ -626,6 +620,42 @@ deriving instance SMTEval exp a => Show (Literal (ArrBinding exp i a))
 instance (SMTEval exp a, SMTEval exp i) => Exprs (ArrBinding exp i a) where
   exprs arr = [toSMT (arr_value arr), toSMT (arr_bound arr)]
 
+data IArrBinding exp i a =
+  IArrBinding {
+    iarr_value  :: SMTArray exp i a,
+    iarr_bound  :: SMTExpr exp i,
+    iarr_origin :: Maybe String }
+  deriving (Eq, Ord, Typeable, Show)
+instance (SMTEval exp a, SMTEval exp i) => Mergeable (IArrBinding exp i a) where
+  merge cond x y =
+    case (iarr_origin x, iarr_origin y) of
+      (Just a1, Just a2) | a1 /= a2 ->
+        error "immutable array bound in two locations"
+      _ ->
+        IArrBinding {
+          iarr_value  = merge cond (iarr_value x) (iarr_value y),
+          iarr_bound  = merge cond (iarr_bound x) (iarr_bound y),
+          iarr_origin = iarr_origin x `mplus` iarr_origin y }
+instance (SMTEval exp a, SMTEval exp i) => ShowModel (IArrBinding exp i a) where
+  showModel arr = lift $ do
+    bound <- getExpr (toSMT (iarr_bound arr))
+    showArray bound (toSMT (iarr_value arr))
+instance (SMTEval exp a, SMTEval exp i) => Fresh (IArrBinding exp i a) where
+  fresh name = do
+    arr   <- fresh name
+    bound <- fresh (name ++ ".bound")
+    return (IArrBinding arr bound Nothing)
+instance (SMTEval exp a, SMTEval exp i) => Invariant (IArrBinding exp i a) where
+  data Literal (IArrBinding exp i a) = LitIAB
+    deriving Typeable
+  havoc name = error ("immutable array " ++ name ++ " rebound")
+instance (SMTEval exp a, SMTEval exp i) => IsLiteral (Literal (IArrBinding exp i a))
+deriving instance SMTEval exp a => Eq   (Literal (IArrBinding exp i a))
+deriving instance SMTEval exp a => Ord  (Literal (IArrBinding exp i a))
+deriving instance SMTEval exp a => Show (Literal (IArrBinding exp i a))
+instance (SMTEval exp a, SMTEval exp i) => Exprs (IArrBinding exp i a) where
+  exprs arr = [toSMT (iarr_value arr), toSMT (iarr_bound arr)]
+
 -- A wrapper to help with fresh name generation.
 newtype SMTArray exp i a = SMTArray SExpr deriving (Eq, Ord, Show, Mergeable)
 instance (SMTEval exp a, SMTEval exp i) => Fresh (SMTArray exp i a) where
@@ -634,6 +664,17 @@ instance (SMTEval exp a, SMTEval exp i) => TypedSExpr (SMTArray exp i a) where
   smtType _ = tArray (smtType (undefined :: SMTExpr exp i)) (smtType (undefined :: SMTExpr exp a))
   toSMT (SMTArray arr) = arr
   fromSMT = SMTArray
+
+arrIx :: forall exp i a. (SMTEval exp i, SMTEval exp a) => String -> SMTExpr exp i -> Verify (SMTExpr exp a)
+arrIx name ix = do
+  iarr <- peek name :: Verify (IArrBinding exp i a)
+  case iarr_origin iarr of
+    Nothing -> return ()
+    Just arrName -> do
+      arr <- peek arrName :: Verify (ArrBinding exp i a)
+      safe <- provable "array not modified" (iarr_value iarr .==. arr_value arr)
+      unless safe (warn ("Unsafe use of frozen array " ++ name))
+  return (fromSMT (select (toSMT (iarr_value iarr)) (toSMT ix)))
 
 ----------------------------------------------------------------------
 -- Instances for the standard non-control flow command datatypes.
@@ -682,7 +723,7 @@ instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr RefCMD exp pred where
   verifyInstr instr@(InitRef _ expr) (RefComp name :: Ref a) =
     withWitness (undefined :: a) instr $ do
       newRef name (undefined :: exp a)
-      eval expr >>= share >>= setRef name
+      eval expr >>= setRef name
 
   verifyInstr instr@(GetRef (RefComp refName)) (ValComp valName :: Val a) =
     withWitness (undefined :: a) instr $ do
@@ -691,7 +732,7 @@ instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr RefCMD exp pred where
 
   verifyInstr instr@(SetRef (RefComp name :: Ref a) expr) () =
     withWitness (undefined :: a) instr $ do
-      eval expr >>= share >>= setRef name
+      eval expr >>= setRef name
 
   verifyInstr instr@(UnsafeFreezeRef (RefComp refName)) (ValComp valName :: Val a) =
     withWitness (undefined :: a) instr $ do
@@ -729,7 +770,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
     withWitness (undefined :: a) instr $ do
       arr <- peek arrName :: Verify (ArrBinding exp i a)
       ix  <- eval ix
-      val <- share (fromSMT (select (toSMT (arr_value arr)) (toSMT ix)))
+      let val = fromSMT (select (toSMT (arr_value arr)) (toSMT ix))
       pokeVal valName (val :: SMTExpr exp a)
 
   verifyInstr instr@(SetArr ix val (ArrComp arrName :: Arr i a)) ()
@@ -738,7 +779,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
       ArrBinding{..} <- peek arrName :: Verify (ArrBinding exp i a)
       ix  <- eval ix
       val <- eval val
-      arr_value' <- share (fromSMT (store (toSMT arr_value) (toSMT ix) (toSMT val)))
+      let arr_value' = fromSMT (store (toSMT arr_value) (toSMT ix) (toSMT val))
       poke arrName (ArrBinding arr_value' arr_bound :: ArrBinding exp i a)
 
   verifyInstr instr@(CopyArr (ArrComp destName :: Arr i a, destOfs) (ArrComp srcName, srcOfs) len) ()
@@ -759,13 +800,10 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
     | Dict <- witnessPred (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
       arr <- peek arrName :: Verify (ArrBinding exp i a)
-      poke iarrName arr
+      poke iarrName (IArrBinding (arr_value arr) (arr_bound arr) (Just arrName))
 
-  verifyInstr instr@(UnsafeThawArr (IArrComp iarrName :: IArr i a)) (ArrComp arrName)
-    | Dict <- witnessPred (undefined :: exp i) =
-    withWitness (undefined :: a) instr $ do
-      arr <- peek iarrName :: Verify (ArrBinding exp i a)
-      poke arrName arr
+  verifyInstr instr@(UnsafeThawArr (IArrComp iarrName :: IArr i a)) (ArrComp arrName) =
+    error "don't know how to thaw arrays, sorry"
 
 instance VerifyInstr ThreadCMD exp pred where
   verifyInstr = error "can't verify ThreadCMD"
@@ -936,12 +974,17 @@ discoverInvariant body = do
       put before
 
       -- Run the program and see what changed.
-      (_, _, hints) <- fmap snd (listen body)
+      (_, _, hints, decls) <- fmap snd (listen body)
       after <- get
 
+      let
+        atoms (Atom x) = [x]
+        atoms (List xs) = concatMap atoms xs
       return (
         Map.keys (modified before after),
-        [ Hint before hint | hint <- hints ])
+        [ Hint before hint
+        | hint <- hints,
+          null (intersect decls (atoms (hb_exp hint))) ])
 
     refine frame hints clauses = do
       ctx <- get
