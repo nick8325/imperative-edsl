@@ -840,7 +840,6 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
       return (Assert Nothing msg)
     else do
       assume "assertion" (toSMT b)
-      hint b
       return (Assert (Just cond) msg)
   verifyInstr instr@(CMD.Hint (exp :: exp a)) () =
     withWitness (undefined :: a) instr $ do
