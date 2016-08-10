@@ -91,7 +91,7 @@ proving def mx = do
   (_, _, mode) <- ask
   case mode of
     Prove   -> mx
-    Execute -> liftIO (putStrLn "skip") >> return def
+    Execute -> return def
 
 -- Assume that a given formula is true.
 assume :: String -> SExpr -> Verify ()
