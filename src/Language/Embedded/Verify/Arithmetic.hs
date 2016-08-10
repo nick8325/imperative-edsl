@@ -35,6 +35,17 @@ instance (Sign s, Width w) => Num (BV s w) where
   fromInteger n = BV (bits (width (undefined :: w)) n)
   BV x + BV y = BV (bvAdd x y)
   BV x - BV y = BV (bvSub x y)
+
+  -- Feldspar uses the idiom b * x (where b is a boolean) to mean
+  -- b ? x : 0. But the SMT solver doesn't like multiplication.
+  -- Here are some transformations which simplify away that idiom.
+  BV (List [Atom "ite", b, x, y]) * z =
+    BV (ite b (unBV (BV x * z)) (unBV (BV y * z)))
+  x * BV (List [Atom "ite", b, y, z]) =
+    BV (ite b (unBV (x * BV y)) (unBV (x * BV z)))
+  x * y | x == 0 || y == 0 = 0
+  x * y | x == 1 = y
+  x * y | y == 1 = x
   BV x * BV y = BV (bvMul x y)
   negate (BV x) = BV (bvNeg x)
   abs = smtAbs
