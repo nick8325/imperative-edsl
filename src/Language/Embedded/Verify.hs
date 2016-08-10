@@ -65,30 +65,44 @@ import qualified Language.Embedded.Verify.SMT as SMT
 -- following components:
 --
 -- Read:  list of formulas which are true in the current branch;
---        "chattiness level" (if > 0 then tracing messages are printed)
+--        "chattiness level" (if > 0 then tracing messages are printed);
+--        whether to try to prove anything or just evaluate the program.
 -- Write: disjunction which is true if the program has called break;
 --        list of warnings generated;
 --        list of hints given;
 --        list of names generated (must not appear in hints)
 -- State: the context, a map from variables to SMT values
-type Verify = RWST ([SExpr], Int) ([SExpr], [String], [HintBody], [String]) Context SMT
+type Verify = RWST ([SExpr], Int, Mode) ([SExpr], [String], [HintBody], [String]) Context SMT
+data Mode = Prove | Execute deriving Eq
 
 runVerify :: Verify a -> IO (a, [String])
 runVerify m = runZ3 ["-t:1000"] $ do
   SMT.setOption ":produce-models" "false"
-  (x, (_, warns, _, _)) <- evalRWST m ([], 0) Map.empty
+  (x, (_, warns, _, _)) <- evalRWST m ([], 0, Prove) Map.empty
   return (x, warns)
+
+-- Run a computation without proving anything.
+quickly :: Verify a -> Verify a
+quickly = local (\(branch, chat, _) -> (branch, chat, Execute))
+
+-- Only run a computation if we are supposed to be proving.
+proving :: a -> Verify a -> Verify a
+proving def mx = do
+  (_, _, mode) <- ask
+  case mode of
+    Prove   -> mx
+    Execute -> liftIO (putStrLn "skip") >> return def
 
 -- Assume that a given formula is true.
 assume :: String -> SExpr -> Verify ()
-assume msg p = do
+assume msg p = proving () $ do
   branch <- branch
   trace msg "Asserted" p
   lift (assert (disj (p:map SMT.not branch)))
 
 -- Check if a given formula holds.
 provable :: String -> SExpr -> Verify Bool
-provable msg p = do
+provable msg p = proving False $ do
   branch <- branch
   stack $ do
     res <- lift $ do
@@ -139,8 +153,8 @@ ite p mx my = do
   let
     withBranch p
       | p == bool True  = local id
-      | p == bool False = local (\(_,  x) -> ([p],  x))
-      | otherwise       = local (\(xs, x) -> (p:xs, x))
+      | p == bool False = local (\(_,  x, y) -> ([p],  x, y))
+      | otherwise       = local (\(xs, x, y) -> (p:xs, x, y))
   (x, ctx1, (break1, warns1, hints1, decls1)) <- lift $ runRWST (withBranch p mx) read ctx
   (y, ctx2, (break2, warns2, hints2, decls2)) <- lift $ runRWST (withBranch (SMT.not p) my) read ctx
   mergeContext p ctx1 ctx2 >>= put
@@ -153,7 +167,7 @@ ite p mx my = do
 
 -- Read the current branch.
 branch :: Verify [SExpr]
-branch = asks fst
+branch = asks (\(branch, _, _) -> branch)
 
 -- Read the context.
 peek :: (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => String -> Verify a
@@ -203,16 +217,16 @@ noWarn = censor (\(breaks, _, hints, decls) -> (breaks, [], hints, decls))
 
 -- Run a computation more chattily.
 chattily :: Verify a -> Verify a
-chattily = local (\(ctx, n) -> (ctx, n+1))
+chattily = local (\(ctx, n, prove) -> (ctx, n+1, prove))
 
 -- Run a computation more quietly.
 quietly :: Verify a -> Verify a
-quietly = local (\(ctx, n) -> (ctx, n-1))
+quietly = local (\(ctx, n, prove) -> (ctx, n-1, prove))
 
 -- Produce debug output.
 chat :: Verify () -> Verify ()
 chat mx = do
-  (_, chatty) <- ask
+  (_, chatty, _) <- ask
   when (chatty > 0) mx
 
 ----------------------------------------------------------------------
@@ -904,8 +918,14 @@ instance Show SomeLiteral where show (SomeLiteral x) = show x
 discoverInvariant :: Verify () -> Verify (Verify ())
 discoverInvariant body = do
   (frame, hints) <- findFrameAndHints
-  ctx <- get
-  abstract ctx frame hints >>= refine frame hints
+  (_, _, mode) <- ask
+  case mode of
+    Prove -> do
+      ctx <- get
+      abstract ctx frame hints >>= refine frame hints
+    Execute -> do
+      assumeLiterals frame []
+      return (noBreak (breaks body) >>= assume "loop terminated")
   where
     -- Suppose we have a while-loop while(E) S, and we know a formula
     -- I(0) which describes the initial state of the loop.
@@ -963,7 +983,7 @@ discoverInvariant body = do
     -- Note that we do all this inside a call to "stack" so that
     -- it doesn't permanently change the verifier state.
 
-    findFrameAndHints = stack $ quietly $ noWarn $ do
+    findFrameAndHints = stack $ quietly $ noWarn $ quickly $ do
       -- Put the verifier in an arbitrary state.
       ctx <- get
       let
@@ -980,11 +1000,13 @@ discoverInvariant body = do
       let
         atoms (Atom x) = [x]
         atoms (List xs) = concatMap atoms xs
-      return (
-        Map.keys (modified before after),
-        [ Hint before hint
-        | hint <- hints,
-          null (intersect decls (atoms (hb_exp hint))) ])
+
+        hints' =
+          [ Hint before hint
+          | hint <- nub hints,
+            null (intersect decls (atoms (hb_exp hint))) ]
+
+      return (Map.keys (modified before after), hints')
 
     refine frame hints clauses = do
       ctx <- get
