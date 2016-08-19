@@ -121,13 +121,17 @@ compControlCMD :: (CompExp exp, CompTypeClass ct) =>
     ControlCMD (Param3 CGen exp ct) a -> CGen a
 compControlCMD (If c t f) = do
     cc <- compExp c
-    ct <- inNewBlock_ t
-    cf <- inNewBlock_ f
-    case (ct, cf) of
-      ([],[]) -> return ()
-      (_ ,[]) -> addStm [cstm| if (   $cc) {$items:ct} |]
-      ([],_ ) -> addStm [cstm| if ( ! $cc) {$items:cf} |]
-      (_ ,_ ) -> addStm [cstm| if (   $cc) {$items:ct} else {$items:cf} |]
+    case cc of
+      C.Var (C.Id "true"  _) _  -> t
+      C.Var (C.Id "false"  _) _ -> f
+      _ -> do
+        ct <- inNewBlock_ t
+        cf <- inNewBlock_ f
+        case (ct, cf) of
+          ([],[]) -> return ()
+          (_ ,[]) -> addStm [cstm| if (   $cc) {$items:ct} |]
+          ([],_ ) -> addStm [cstm| if ( ! $cc) {$items:cf} |]
+          (_ ,_ ) -> addStm [cstm| if (   $cc) {$items:ct} else {$items:cf} |]
 compControlCMD (While cont body) = do
     s <- get
     noop <- do
@@ -174,11 +178,15 @@ compControlCMD (Hint _) = return ()
 
 compPtrCMD :: PtrCMD (Param3 prog exp pred) a -> CGen a
 compPtrCMD (SwapPtr a b) = do
-    sym <- gensym "tmp"
-    addLocal [cdecl| void * $id:sym; |]
-    addStm   [cstm| $id:sym = $id:a; |]
-    addStm   [cstm| $id:a = $id:b; |]
-    addStm   [cstm| $id:b = $id:sym; |]
+    let swap_ptr =
+          "#define swap_ptr(a,b) do {void* TmP=a; a=b; b=TmP;} while (0)"
+      -- See this solution on the use of `do{}while(0)`:
+      -- <http://stackoverflow.com/a/3982397/1105347>
+      --
+      -- The name "TmP" is to make it very unlikely to have the same name as `a`
+      -- or `b`.
+    addGlobal [cedecl| $esc:swap_ptr |]
+    addStm [cstm| swap_ptr($id:a, $id:b); |]
 
 compIOMode :: IOMode -> String
 compIOMode ReadMode      = "r"
