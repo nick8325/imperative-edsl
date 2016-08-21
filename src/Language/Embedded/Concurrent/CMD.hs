@@ -277,18 +277,3 @@ instance FreeExp IO
     type FreePred IO = Typeable
     constExp = return
     varExp   = error "varExp: unimplemented over IO"
-
-instance DryInterp ChanCMD where
-  dryInterp NewChan{}   = liftM ChanComp $ freshStr "c"
-  dryInterp CloseChan{} = return ()
-  dryInterp ReadOK{}    = liftM ValComp $ freshStr "v"
-  dryInterp ReadOne{}   = liftM ValComp $ freshStr "v"
-  dryInterp WriteOne{}  = liftM ValComp $ freshStr "v"
-  dryInterp ReadChan{}  = liftM ValComp $ freshStr "v"
-  dryInterp WriteChan{} = liftM ValComp $ freshStr "v"
-
-instance DryInterp ThreadCMD where
-  dryInterp ForkWithId{} = liftM TIDComp $ freshStr "t"
-  dryInterp Kill{}       = return ()
-  dryInterp Wait{}       = return ()
-  dryInterp Sleep{}      = return ()
