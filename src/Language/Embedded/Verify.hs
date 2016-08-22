@@ -405,7 +405,7 @@ instance Exprs Context where
 ----------------------------------------------------------------------
 
 type Context = Map Name Entry
-data Name  = forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => Name String a
+data Name  = forall a. Typeable a => Name String a
 data Entry = forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => Entry a
 
 instance Eq Name where x == y = compare x y == EQ
@@ -423,7 +423,7 @@ instance Show Entry where
   showsPrec n (Entry x) = showsPrec n x
 
 -- Look up a value in the context.
-lookupContext :: forall a. (Typeable a, Ord a, Mergeable a, Show a, ShowModel a, Invariant a, Exprs a) => String -> Context -> a
+lookupContext :: forall a. Typeable a => String -> Context -> a
 lookupContext name ctx =
   case Map.lookup (Name name (undefined :: a)) ctx of
     Nothing -> error ("variable " ++ name ++ " not found in context")
@@ -824,7 +824,14 @@ instance VerifyInstr ThreadCMD exp pred where
 instance VerifyInstr ChanCMD exp pred where
   verifyInstr = error "can't verify ChanCMD"
 instance VerifyInstr PtrCMD exp pred where
-  verifyInstr = error "can't verify PtrCMD"
+  verifyInstr instr@(SwapPtr (x :: a) y) _ = do
+    ctx <- get
+    let
+      toName x = Name (toString x) x
+      lookup x =
+        Map.findWithDefault (error "SwapPtr: name not found") (toName x) ctx
+    put (Map.insert (toName x) (lookup y) (Map.insert (toName y) (lookup x) ctx))
+    return instr
 
 ----------------------------------------------------------------------
 -- An instance for ControlCMD - where the magic happens
@@ -986,10 +993,10 @@ discoverInvariant body = do
       -- Put the verifier in an arbitrary state.
       ctx <- get
       let
-        op ctx (Name name (_ :: a)) = do
+        op ctx (Name name _, Entry (_ :: a)) = do
           val <- fresh name
           return (insertContext name (val :: a) ctx)
-      before <- foldM op Map.empty (Map.keys ctx)
+      before <- foldM op Map.empty (Map.toList ctx)
       put before
 
       -- Run the program and see what changed.
@@ -1005,7 +1012,7 @@ discoverInvariant body = do
           | hint <- nub hints,
             null (intersect decls (atoms (hb_exp hint))) ]
 
-      return (Map.keys (modified before after), hints')
+      return (Map.toList (modified before after), hints')
 
     refine frame hints clauses = do
       ctx <- get
@@ -1019,10 +1026,10 @@ discoverInvariant body = do
         return (noBreak (breaks body) >>= assume "loop terminated")
       else refine frame hints clauses'
 
-    assumeLiterals :: [Name] -> [[SomeLiteral]] -> Verify ()
+    assumeLiterals :: [(Name, Entry)] -> [[SomeLiteral]] -> Verify ()
     assumeLiterals frame clauses = do
       ctx <- get
-      forM_ frame $ \(Name name (_ :: a)) -> do
+      forM_ frame $ \(Name name _, Entry (_ :: a)) -> do
         val <- peek name >>= havoc name
         poke name (val :: a)
       mapM_ (evalClause ctx >=> assume "invariant") clauses
@@ -1036,15 +1043,15 @@ discoverInvariant body = do
       res <- quietly $ Abstract.abstract (evalClause old >=> provable "invariant") (lits frame)
       chat $ liftIO $
         case res of
-          [] -> putStrLn ("No invariant found over frame " ++ show frame)
-          [clause] -> putStrLn ("Possible invariant " ++ show clause ++ " over frame " ++ show frame)
+          [] -> putStrLn ("No invariant found over frame " ++ show (map fst frame))
+          [clause] -> putStrLn ("Possible invariant " ++ show clause ++ " over frame " ++ show (map fst frame))
           _ -> do
-            putStrLn ("Possible invariant over frame " ++ show frame ++ ":")
+            putStrLn ("Possible invariant over frame " ++ show (map fst frame) ++ ":")
             sequence_ [ putStrLn ("  " ++ show clause) | clause <- res ]
       return res
       where
         lits frame =
-          concat [ map SomeLiteral (literals name x) | Name name x <- frame ] ++
+          concat [ map SomeLiteral (literals name x) | (Name name _, Entry x) <- frame ] ++
           [ SomeLiteral hint | hint <- hints, hb_type (hint_body hint) == tBool ]
 
     disjunction cs1 cs2 =
