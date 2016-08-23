@@ -95,6 +95,10 @@ declareFun :: String -> [SExpr] -> SExpr -> SMT SExpr
 declareFun name args res = withSolver $ \solver -> do
   lift (SMT.declareFun solver name args res)
 
+declareSort :: String -> SMT ()
+declareSort name = withSolver $ \solver ->
+  lift (SMT.simpleCommand solver ["declare-sort", name])
+
 showSExpr :: SExpr -> String
 showSExpr exp = SMT.showsSExpr exp ""
 

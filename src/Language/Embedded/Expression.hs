@@ -55,4 +55,3 @@ class FreeExp exp => EvalExp exp
   where
     -- | Evaluation of a closed expression
     evalExp :: exp a -> a
-

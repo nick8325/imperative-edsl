@@ -23,8 +23,8 @@ module Language.Embedded.Imperative.CMD
   , IxRange
   , ControlCMD (..)
     -- * Generic pointer manipulation
-  , ToString (..)
   , IsPointer (..)
+  , PointerType (..)
   , PtrCMD (..)
     -- * File handling
   , Handle (..)
@@ -177,7 +177,6 @@ data IArr i a
 -- of `imperative-edsl` may always chose to make a wrapper interface that uses
 -- a specific index type.
 
-instance ToString (Arr i a) where toString (ArrComp arr) = arr
 instance ToIdent  (Arr i a)  where toIdent (ArrComp arr)  = C.Id arr
 instance ToIdent  (IArr i a) where toIdent (IArrComp arr) = C.Id arr
 
@@ -338,30 +337,32 @@ instance DryInterp ControlCMD
 -- * Generic pointer manipulation
 --------------------------------------------------------------------------------
 
--- | Types whose values have a name (only implemented for `IsPointer` currently)
-class ToString a
-  where
-    toString :: a -> String
-
 -- The reason for not implementing `SwapPtr` using the `Ptr` type is that it's
 -- (currently) not possible to interpret `Ptr` in `IO`.
 
 -- | Types that are represented as a pointers in C
-class (ToIdent a, ToString a, Typeable a) => IsPointer a
+class (Typeable a, ToIdent a) => IsPointer a
   where
     runSwapPtr :: a -> a -> IO ()
+    whatPtr :: PointerType a
 
-instance (Typeable a, Typeable i) => IsPointer (Arr i a)
+data PointerType a where
+  ArrPointerType :: (Typeable i, Typeable a) => PointerType (Arr i a)
+  PtrPointerType :: Typeable a => PointerType (Ptr a)
+
+instance (Typeable i, Typeable a) => IsPointer (Arr i a)
   where
     runSwapPtr (ArrRun arr1) (ArrRun arr2) = do
         arr1' <- readIORef arr1
         arr2' <- readIORef arr2
         writeIORef arr1 arr2'
         writeIORef arr2 arr1'
+    whatPtr = ArrPointerType
 
 instance Typeable a => IsPointer (Ptr a)
   where
     runSwapPtr = error "cannot run SwapPtr for Ptr"
+    whatPtr = PtrPointerType
 
 data PtrCMD fs a
   where
@@ -497,7 +498,6 @@ instance DryInterp FileCMD
 newtype Ptr (a :: *) = PtrComp {ptrId :: VarId}
   deriving (Eq, Show, Typeable)
 
-instance ToString (Ptr a) where toString = ptrId
 instance ToIdent  (Ptr a) where toIdent  = C.Id . ptrId
 
 -- | Abstract object
