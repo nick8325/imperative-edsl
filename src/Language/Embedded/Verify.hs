@@ -243,10 +243,10 @@ class Verifiable prog where
 verify :: Verifiable prog => prog a -> Verify (prog a)
 verify = fmap fst . verifyWithResult
 
-instance (Patch prog, PatchConstraint prog prog, VerifyInstr (FirstOrder prog) exp pred) => Verifiable (Program prog (Param2 exp pred)) where
+instance (VerifyInstr (FirstOrder prog) exp pred, TypeablePred pred, Substitute exp, SubstPred exp ~ pred, pred Bool, Defunctionalise prog) => Verifiable (Program prog (Param2 exp pred)) where
   verifyWithResult prog = do
     (prog', res) <- verifyWithResult (defunctionalise prog)
-    return (patch prog' prog, res)
+    return (refunctionalise prog', res)
 
 instance VerifyInstr prog exp pred => Verifiable (Prog prog (Param2 exp pred)) where
   verifyWithResult (Return x)   = return (Return x, x)
