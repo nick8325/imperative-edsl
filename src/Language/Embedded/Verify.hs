@@ -648,7 +648,11 @@ deriving instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i 
 deriving instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrBinding exp i a)
 deriving instance (SMTEval exp a, SMTEval exp i) => Exprs     (ArrBinding exp i a)
 instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrBinding exp i a) where
-  fresh = fmap ArrBinding . fresh
+  fresh name = do
+    arr   <- fresh name
+    bound <- fresh (name ++ ".bound")
+    ident <- freshVar (name ++ ".ident") tInt
+    return (ArrBinding (ArrContents arr bound ident))
 instance (SMTEval exp a, SMTEval exp i) => Invariant (ArrBinding exp i a) where
   data Literal (ArrBinding exp i a) = Source String String
     deriving (Typeable, Eq, Ord, Show)
