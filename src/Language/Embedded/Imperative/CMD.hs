@@ -140,7 +140,7 @@ instance DryInterp RefCMD
     dryInterp (InitRef base _)    = liftM RefComp $ freshStr base
     dryInterp (GetRef _)          = liftM ValComp $ freshStr "v"
     dryInterp (SetRef _ _)        = return ()
-    dryInterp (UnsafeFreezeRef _) = liftM ValComp $ freshStr "v"
+    dryInterp (UnsafeFreezeRef (RefComp ref)) = liftM ValComp $ freshStr (ref ++ ".")
 
 
 
@@ -238,8 +238,8 @@ instance DryInterp ArrCMD
     dryInterp (GetArr _ _)        = liftM ValComp $ freshStr "v"
     dryInterp (SetArr _ _ _)      = return ()
     dryInterp (CopyArr _ _ _)     = return ()
-    dryInterp (UnsafeFreezeArr _) = liftM IArrComp $ freshStr "ia"
-    dryInterp (UnsafeThawArr _)   = liftM ArrComp $ freshStr "a"
+    dryInterp (UnsafeFreezeArr (ArrComp arr)) = liftM IArrComp $ freshStr (arr ++ ".")
+    dryInterp (UnsafeThawArr (IArrComp iarr)) = liftM ArrComp $ freshStr (iarr ++ ".")
 
 
 
