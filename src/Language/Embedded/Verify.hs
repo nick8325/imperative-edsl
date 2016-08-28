@@ -16,6 +16,7 @@ import Data.Typeable
 import Data.Constraint(Constraint, Dict(..))
 import Control.Monad.RWS.Strict
 import Control.Monad.Exception
+import Data.Maybe
 
 import Data.ALaCarte
 import Language.Embedded.Imperative.CMD hiding (ControlCMD(..))
@@ -394,6 +395,9 @@ class Exprs a where
   -- List SMT expressions contained inside a value.
   exprs :: a -> [SExpr]
 
+instance Exprs SExpr where
+  exprs x = [x]
+
 instance Exprs Entry where
   exprs (Entry x) = exprs x
 
@@ -529,7 +533,6 @@ instance SMTEval exp a => Fresh (ValBinding exp a) where
 instance SMTEval exp a => Invariant (ValBinding exp a) where
   data Literal (ValBinding exp a) = LitVB
     deriving (Eq, Ord, Show, Typeable)
-  havoc name = error ("immutable binding " ++ name ++ " rebound")
 instance SMTEval exp a => IsLiteral (Literal (ValBinding exp a))
 instance SMTEval exp a => Exprs (ValBinding exp a) where
   exprs val = [toSMT (vb_value val)]
@@ -611,11 +614,12 @@ data ArrContents exp i a =
   ArrContents {
     arr_value  :: SMTArray exp i a,
     arr_bound  :: SMTExpr exp i,
+    arr_index  :: SMTExpr exp i,
     arr_ident  :: SExpr }
   deriving (Eq, Ord, Typeable, Show)
 instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrContents exp i a) where
-  merge cond (ArrContents v1 b1 i1) (ArrContents v2 b2 i2) =
-    ArrContents (merge cond v1 v2) (merge cond b1 b2) (merge cond i1 i2)
+  merge cond (ArrContents v1 b1 i1 id1) (ArrContents v2 b2 i2 id2) =
+    ArrContents (merge cond v1 v2) (merge cond b1 b2) (merge cond i1 i2) (merge cond id1 id2)
 instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrContents exp i a) where
   showModel arr = lift $ do
     bound <- getExpr (toSMT (arr_bound arr))
@@ -624,53 +628,109 @@ instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrContents exp i a) where
   fresh name = do
     arr   <- fresh name
     bound <- fresh (name ++ ".bound")
+    index <- fresh (name ++ ".index")
     ident <- fmap (Atom . show) (lift SMT.freshNum)
-    return (ArrContents arr bound ident)
+    return (ArrContents arr bound index ident)
 instance (SMTEval exp a, SMTEval exp i) => Invariant (ArrContents exp i a) where
-  data Literal (ArrContents exp i a) = LitAC
+  data Literal (ArrContents exp i a) = Readable String
     deriving Typeable
   havoc name arr = do
-    arr'  <- fresh name
-    return arr' { arr_ident = arr_ident arr }
-instance (SMTEval exp a, SMTEval exp i) => IsLiteral (Literal (ArrContents exp i a))
+    value <- fresh name
+    bound <- fresh (name ++ ".bound")
+    return arr { arr_value = value, arr_bound = bound }
+
+  literals ctx name _ =
+    [ Readable arr
+    | (Name arr _, Entry x) <- Map.toList ctx,
+      (y :: ArrBinding exp i a) <- catMaybes [cast x],
+      name `elem` arrb_sources y ]
+
+instance (SMTEval exp a, SMTEval exp i) => IsLiteral (Literal (ArrContents exp i a)) where
+  smtLit _ ctx (Readable name) =
+    let
+      arr :: ArrBinding exp i a
+      arr = lookupContext name ctx
+
+      find :: String -> ArrContents exp i a
+      find name = lookupContext name ctx
+
+      choose p f (x:xs) = foldr (\y z -> merge (p y) (f y) z) (f x) xs
+
+      value = choose (p . find) (f . find) (arrb_sources arr)
+        where
+          p src = arr_ident src `eq` arrb_source arr
+          f src = selectArray (arr_value src) (arrb_index arr)
+
+    in value .==. arrb_skolem arr
+
 deriving instance SMTEval exp a => Eq   (Literal (ArrContents exp i a))
 deriving instance SMTEval exp a => Ord  (Literal (ArrContents exp i a))
 deriving instance SMTEval exp a => Show (Literal (ArrContents exp i a))
 instance (SMTEval exp a, SMTEval exp i) => Exprs (ArrContents exp i a) where
-  exprs arr = [toSMT (arr_value arr), toSMT (arr_bound arr), arr_ident arr]
+  exprs arr = [toSMT (arr_value arr), toSMT (arr_bound arr), toSMT (arr_index arr), arr_ident arr]
 
 -- A binding that represents a reference to an array.
-newtype ArrBinding exp i a =
+data ArrBinding exp i a =
   ArrBinding {
-    arr_contents :: ArrContents exp i a }
+    arrb_index   :: SMTExpr exp i,
+    arrb_skolem  :: SMTExpr exp a,
+    arrb_source  :: SExpr,
+    arrb_sources :: [String] }
   deriving (Eq, Ord, Typeable, Show)
-deriving instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a)
-deriving instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrBinding exp i a)
-deriving instance (SMTEval exp a, SMTEval exp i) => Exprs     (ArrBinding exp i a)
+
+arrBinding :: forall exp i a. (SMTEval exp i, SMTEval exp a) => SExpr -> Verify (ArrBinding exp i a)
+arrBinding source = do
+  ctx <- get
+  let
+    sources =
+      [ name | Name name x <- Map.keys ctx, typeOf x == typeOf (undefined :: ArrContents exp i a) ]
+    p name = do
+      arr <- peek name :: Verify (ArrContents exp i a)
+      fmap not (provable "not array source" (SMT.not (source `eq` arr_ident arr)))
+
+  sources <- filterM p sources
+
+  let
+    choose p f (x:xs) = foldr (\y z -> merge (p y) (f y) z) (f x) xs
+
+    find :: String -> ArrContents exp i a
+    find name = lookupContext name ctx
+
+    p name = arr_ident (find name) `eq` source
+
+    index  = choose p (arr_index . find) sources
+    skolem = choose p (f . find) sources
+      where
+        f arr = selectArray (arr_value arr) (arr_index arr)
+
+  return (ArrBinding index skolem source sources)
+
+instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a) where
+  merge cond (ArrBinding idx1 sk1 s1 ss1) (ArrBinding idx2 sk2 s2 ss2) =
+    ArrBinding (merge cond idx1 idx2) (merge cond sk1 sk2) (merge cond s1 s2) (ss1 `union` ss2)
+instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrBinding exp i a) where
+  showModel arr = return (intercalate " or " (arrb_sources arr))
+instance (SMTEval exp a, SMTEval exp i) => Exprs (ArrBinding exp i a) where
+  exprs (ArrBinding idx sk s _) = [toSMT idx, toSMT sk, s]
 instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrBinding exp i a) where
   fresh name = do
-    arr   <- fresh name
-    bound <- fresh (name ++ ".bound")
-    ident <- freshVar (name ++ ".ident") tInt
-    return (ArrBinding (ArrContents arr bound ident))
+    ident  <- freshVar (name ++ ".ident") tInt
+    arrBinding ident
+
 instance (SMTEval exp a, SMTEval exp i) => Invariant (ArrBinding exp i a) where
   data Literal (ArrBinding exp i a) = Source String String
     deriving (Typeable, Eq, Ord, Show)
+  literals ctx name arr = map (Source name) (arrb_sources arr)
 
-  literals ctx name arr = map (Source name) (arraySources arr ctx)
 instance (SMTEval exp a, SMTEval exp i) => IsLiteral (Literal (ArrBinding exp i a)) where
-  smtLit _ ctx (Source arrName srcName :: Literal (ArrBinding exp i a)) =
-    arr_ident src `eq` arr_ident (arr_contents arr)
+  smtLit _ ctx (Source arrName srcName) =
+    arr_ident src `eq` arrb_source arr
     where
       src :: ArrContents exp i a
       src = lookupContext srcName ctx
 
       arr :: ArrBinding exp i a
       arr = lookupContext arrName ctx
-
-arraySources :: (SMTEval exp a, SMTEval exp i) => ArrBinding exp i a -> Context -> [String]
-arraySources (ArrBinding x) ctx =
-  [ name | Name name y <- Map.keys ctx, typeOf x == typeOf y ]
 
 -- A wrapper to help with fresh name generation.
 newtype SMTArray exp i a = SMTArray SExpr deriving (Eq, Ord, Show, Mergeable)
@@ -681,34 +741,74 @@ instance (SMTEval exp a, SMTEval exp i) => TypedSExpr (SMTArray exp i a) where
   toSMT (SMTArray arr) = arr
   fromSMT = SMTArray
 
-readArr :: forall exp i a. (SMTEval exp i, SMTEval exp a) => String -> SMTExpr exp i -> Verify (SMTExpr exp a)
+selectArray :: (SMTEval exp a, SMTEval exp i) => SMTArray exp i a -> SMTExpr exp i -> SMTExpr exp a
+selectArray arr i = fromSMT (select (toSMT arr) (toSMT i))
+
+newArr :: forall exp i a. (Num (SMTExpr exp i), SMTOrd (SMTExpr exp i), SMTEval exp i, SMTEval exp a) => String -> SMTExpr exp i -> Verify (SMTArray exp i a)
+newArr name n = do
+  arr <- fresh name :: Verify (ArrContents exp i a)
+
+  poke name arr
+  poke name (ArrBinding (arr_index arr) (selectArray (arr_value arr) (arr_index arr)) (arr_ident arr) [name] :: ArrBinding exp i a)
+  return (arr_value arr)
+
+readArr :: forall exp i a. (SMTOrd (SMTExpr exp i), SMTEval exp i, SMTEval exp a) => String -> SMTExpr exp i -> Verify (SMTExpr exp a)
 readArr name ix = do
+  hintArr name ix (undefined :: a)
   ctx <- get
-  ArrBinding arr <- peek name :: Verify (ArrBinding exp i a)
+  arr <- peek name :: Verify (ArrBinding exp i a)
+
   let
-    sources = arraySources (ArrBinding arr) ctx
-    prop =
-      disj
-        [ (arr_ident arr `eq` arr_ident arr') .&&.
-          (arr_value arr .==. arr_value arr')
-        | x <- sources,
-          let arr' = lookupContext x ctx ]
+    find :: String -> ArrContents exp i a
+    find name = lookupContext name ctx
+
+    choose p f (x:xs) = foldr (\y z -> merge (p y) (f y) z) (f x) xs
+
+    value = choose (p . find) (f . find) (arrb_sources arr)
+      where
+        p src = arr_ident src `eq` arrb_source arr
+        f src = selectArray (arr_value src) ix
+
+    prop = SMT.not (ix .==. arrb_index arr) .||. (value .==. arrb_skolem arr)
 
   safe <- provable "array not modified" prop
   unless safe (warn ("Unsafe use of frozen array " ++ name))
-  return (fromSMT (select (toSMT (arr_value arr)) (toSMT ix)))
+  return value
 
-updateArr :: forall exp i a. (SMTEval exp i, SMTEval exp a) => String -> (SMTArray exp i a -> SMTArray exp i a) -> Verify ()
-updateArr name update = do
+hintArr :: forall exp i a. (SMTOrd (SMTExpr exp i), SMTEval exp i, SMTEval exp a) => String -> SMTExpr exp i -> a -> Verify ()
+hintArr name ix _ = do
   ctx <- get
-  ArrBinding arr <- peek name :: Verify (ArrBinding exp i a)
-  let sources = arraySources (ArrBinding arr) ctx
-  forM_ sources $ \x -> do
-    arr' <- peek x
-    here <- fmap not $ provable "arrays distinct" (SMT.not (arr_ident arr `eq` arr_ident arr'))
-    when here $ poke x $
-      arr' { arr_value = merge (arr_ident arr `eq` arr_ident arr') (update (arr_value arr')) (arr_value arr') }
-  poke name (ArrBinding (arr { arr_value = update (arr_value arr) }))
+  arr <- peek name :: Verify (ArrBinding exp i a)
+  forM_ (arrb_sources arr) $ \x -> do
+    let ident = lookupContext x ctx :: ArrContents exp i a
+    hintFormula (ix .<.  arr_index ident)
+    hintFormula (ix .>.  arr_index ident)
+    hintFormula (ix .==. arr_index ident)
+
+updateArr :: forall exp i a.
+  (SMTEval exp i, SMTEval exp a) =>
+  String ->
+  (SMTArray exp i a -> SMTArray exp i a) ->
+  (SMTExpr exp i -> SMTExpr exp a -> SMTExpr exp a) -> Verify ()
+updateArr name update updateSkolem = do
+  ctx <- get
+  arr <- peek name :: Verify (ArrBinding exp i a)
+  forM_ (arrb_sources arr) $ \x -> do
+    src <- peek x
+    poke x $
+      src { arr_value = merge (arrb_source arr `eq` arr_ident src) (update (arr_value src)) (arr_value src) }
+  poke name arr { arrb_skolem = updateSkolem (arrb_index arr) (arrb_skolem arr) }
+
+writeArr :: forall exp i a.
+  (SMTEval exp i, SMTEval exp a) => String -> SMTExpr exp i -> SMTExpr exp a -> Verify ()
+writeArr name ix val =
+  updateArr name upd updSk
+  where
+    upd :: SMTArray exp i a -> SMTArray exp i a
+    upd arr = fromSMT (store (toSMT arr) (toSMT ix) (toSMT val))
+
+    updSk :: SMTExpr exp i -> SMTExpr exp a -> SMTExpr exp a
+    updSk i x = merge (i .==. ix) val x
 
 ----------------------------------------------------------------------
 -- Instances for the standard non-control flow command datatypes.
@@ -774,20 +874,19 @@ instance (pred ~ Pred exp, SMTEval1 exp) => VerifyInstr RefCMD exp pred where
 
 instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
   verifyInstr instr@(NewArr _ n) arr@(ArrComp name :: Arr i a)
-    | Dict <- witnessPred (undefined :: exp i) =
+    | Dict <- witnessPred (undefined :: exp i),
+      Dict <- witnessNum (undefined :: exp i),
+      Dict <- witnessOrd (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
-      arr <- fresh name
-      n   <- eval n
-      let arr' :: ArrContents exp i a
-          arr' = arr { arr_bound = n }
-      poke name arr'
-      poke name (ArrBinding arr')
+      n <- eval n
+      newArr name n :: Verify (SMTArray exp i a)
+      return ()
 
   verifyInstr instr@(InitArr _ xs) arr@(ArrComp name :: Arr i a)
     | Dict <- witnessPred (undefined :: exp i),
-      Dict <- witnessNum (undefined :: exp i) =
+      Dict <- witnessNum (undefined :: exp i),
+      Dict <- witnessOrd (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
-      arr <- fresh name
       let
         is :: [SMTExpr exp i]
         is = map fromConstant [0..]
@@ -797,29 +896,27 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
 
         n = fromIntegral (length xs)
 
-        arr' :: ArrContents exp i a
-        arr' = arr { arr_bound = n }
+      arr <- newArr name n :: Verify (SMTArray exp i a)
 
       forM_ (zip is ys) $ \(i, x) ->
-        assume "array initialisation" (select (toSMT (arr_value arr')) (toSMT i) `eq` toSMT x)
-
-      poke name arr'
-      poke name (ArrBinding arr')
+        assume "array initialisation" (selectArray arr i .==. x)
 
   verifyInstr instr@(GetArr ix (ArrComp arrName :: Arr i a)) (ValComp valName)
-    | Dict <- witnessPred (undefined :: exp i) =
+    | Dict <- witnessPred (undefined :: exp i),
+      Dict <- witnessOrd  (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
       ix  <- eval ix
       val <- readArr arrName ix
       pokeVal valName (val :: SMTExpr exp a)
 
   verifyInstr instr@(SetArr ix val (ArrComp arrName :: Arr i a)) ()
-    | Dict <- witnessPred (undefined :: exp i) =
+    | Dict <- witnessPred (undefined :: exp i),
+      Dict <- witnessOrd  (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
       ix  <- eval ix
       val <- eval val
-      updateArr arrName $ \(arr :: SMTArray exp i a) ->
-        fromSMT (store (toSMT arr) (toSMT ix) (toSMT val))
+      writeArr arrName ix val
+      hintArr arrName ix (undefined :: a)
 
   verifyInstr instr@(CopyArr (ArrComp destName :: Arr i a, destOfs) (ArrComp srcName, srcOfs) len) ()
     | Dict <- witnessPred (undefined :: exp i),
@@ -832,15 +929,17 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
       srcOfs  <- eval srcOfs
       len     <- eval len
 
-      -- Check safety of reading from source
-      i <- fresh "index" :: Verify (SMTExpr exp i)
-      assume "index in bounds" ((srcOfs .<=. i) .&&. (i .<. (srcOfs + len)))
-      readArr srcName i :: Verify (SMTExpr exp a)
+      -- Move one element "by hand" to do safety check and mark
+      -- destination as modified
+      ix <- fresh "index" :: Verify (SMTExpr exp i)
+      assume "index in bounds" $ (len .<=. 0) .||. ((srcOfs .<=. ix) .&&. (ix .<. (srcOfs + len)))
+      val <- readArr srcName ix :: Verify (SMTExpr exp a)
+      writeArr destName (destOfs + ix) val
 
       -- XXX for now, leave the destination uninterpreted
       -- (should introduce a new fun and transform it to an array)
       dest' <- fresh "copy" :: Verify (SMTArray exp i a)
-      updateArr destName $ \arr -> dest'
+      updateArr destName (\arr -> dest') (\_ -> id)
 
   verifyInstr instr@(UnsafeFreezeArr (ArrComp arrName :: Arr i a)) (IArrComp iarrName)
     | Dict <- witnessPred (undefined :: exp i) =
@@ -1034,8 +1133,8 @@ discoverInvariant body = do
       -- Put the verifier in an arbitrary state.
       ctx <- get
       let
-        op ctx (Name name _, Entry (_ :: a)) = do
-          val <- fresh name
+        op ctx (Name name _, Entry (x :: a)) = do
+          val <- havoc name x
           return (insertContext name (val :: a) ctx)
       before <- foldM op Map.empty (Map.toList ctx)
       put before
@@ -1073,7 +1172,7 @@ discoverInvariant body = do
       forM_ frame $ \(Name name _, Entry (_ :: a)) -> do
         val <- peek name >>= havoc name
         poke name (val :: a)
-      mapM_ (evalClause ctx >=> assume "invariant") clauses
+      mapM_ (\clause -> (evalClause ctx >=> assume (show clause)) clause) clauses
 
     evalClause old clause = do
       ctx <- get
@@ -1081,7 +1180,7 @@ discoverInvariant body = do
 
     abstract old frame hints = fmap (usort . map usort) $ do
       ctx <- get
-      res <- quietly $ Abstract.abstract (evalClause old >=> provable "invariant") (lits frame ctx)
+      res <- quietly $ Abstract.abstract (\clause -> (evalClause old >=> provable (show clause)) clause) (lits frame ctx)
       chat $ liftIO $
         case res of
           [] -> putStrLn ("No invariant found over frame " ++ show (map fst frame))
