@@ -33,7 +33,10 @@ instance Show (BV s a) where
 
 instance (Sign s, Width w) => Num (BV s w) where
   fromInteger n = BV (bits (width (undefined :: w)) n)
+  x + y | x == 0 = y
+  x + y | y == 0 = x
   BV x + BV y = BV (bvAdd x y)
+  x - y | y == 0 = x
   BV x - BV y = BV (bvSub x y)
 
   -- Feldspar uses the idiom b * x (where b is a boolean) to mean
