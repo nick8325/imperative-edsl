@@ -12,6 +12,7 @@ import Data.List hiding (break)
 import qualified Data.Map.Strict as Map
 import Data.Map(Map)
 import Data.Ord
+import Data.Function
 import Data.Typeable
 import Data.Constraint(Constraint, Dict(..))
 import Control.Monad.RWS.Strict
@@ -358,8 +359,14 @@ class (Ord a, Typeable a, Show a) => IsLiteral a where
   -- Evaluate a literal.
   -- The two context arguments are the old and new contexts
   -- (on entry to the loop and now).
+
   smtLit :: Context -> Context -> a -> SExpr
   smtLit = error "smtLit not defined"
+  -- What phase is the literal in?
+  -- Literals from different phases cannot be combined in one clause.
+  phase :: a -> Int
+  phase _ = 0
+
 
 data HintBody =
   HintBody {
@@ -1153,7 +1160,7 @@ discoverInvariant body = do
 
     abstract old frame hints = fmap (usort . map usort) $ do
       ctx <- get
-      res <- quietly $ Abstract.abstract (\clause -> (evalClause old >=> provable (show clause)) clause) (lits frame ctx)
+      res <- quietly $ fmap concat $ mapM (Abstract.abstract (\clause -> (evalClause old >=> provable (show clause)) clause)) (lits frame ctx)
       chat $ liftIO $
         case res of
           [] -> putStrLn ("No invariant found over frame " ++ show (map fst frame))
@@ -1164,6 +1171,7 @@ discoverInvariant body = do
       return res
       where
         lits frame ctx =
+          partitionBy (\(SomeLiteral x) -> phase x) $
           concat [ map SomeLiteral (literals ctx name x) | (Name name _, Entry x) <- frame ] ++
           [ SomeLiteral hint | hint <- hints, hb_type (hint_body hint) == tBool ]
 
@@ -1174,3 +1182,6 @@ discoverInvariant body = do
 
     usort :: Ord a => [a] -> [a]
     usort = map head . group . sort
+
+    partitionBy :: Ord b => (a -> b) -> [a] -> [[a]]
+    partitionBy f xs = groupBy ((==) `on` f) (sortBy (comparing f) xs)
