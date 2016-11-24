@@ -87,85 +87,85 @@ testCopyArr1 :: Prog ()
 testCopyArr1 = do
     arr1 :: Arr Word32 Int32 <- newArr (10 :: CExp Word32)
     arr2 :: Arr Word32 Int32 <- newArr (10 :: CExp Word32)
-    sequence_ [setArr i (i2n i+10) arr1 | i' <- [0..9], let i = fromInteger i']
+    sequence_ [setArr arr1 i (i2n i+10) | i' <- [0..9], let i = fromInteger i']
     copyArr (arr2,0) (arr1,0) 10
-    sequence_ [getArr i arr2 >>= printf "%d " . (*3) | i' <- [0..9], let i = fromInteger i']
+    sequence_ [getArr arr2 i >>= printf "%d " . (*3) | i' <- [0..9], let i = fromInteger i']
     printf "\n"
 
 testCopyArr2 :: Prog ()
 testCopyArr2 = do
     arr1 :: Arr Word32 Int32 <- newArr (20 :: CExp Word32)
     arr2 :: Arr Word32 Int32 <- newArr (20 :: CExp Word32)
-    sequence_ [setArr i (i2n i+10) arr1 | i' <- [0..19], let i = fromInteger i']
+    sequence_ [setArr arr1 i (i2n i+10) | i' <- [0..19], let i = fromInteger i']
     copyArr (arr2,10) (arr1,5) 10
-    sequence_ [getArr i arr2 >>= printf "%d " . (*3) | i' <- [10..19], let i = fromInteger i']
+    sequence_ [getArr arr2 i >>= printf "%d " . (*3) | i' <- [10..19], let i = fromInteger i']
     printf "\n"
 
 testArr2 :: Prog ()
 testArr2 = do
     n <- fget stdin
     arr :: Arr Word32 Int32 <- newArr n  -- Array of dynamic length
-    sequence_ [setArr (i2n i) i arr | i' <- [0..3], let i = fromInteger i']
-    sequence_ [getArr i arr >>= printf "%d " . (*3) | i' <- [0..3], let i = fromInteger i']
+    sequence_ [setArr arr (i2n i) i | i' <- [0..3], let i = fromInteger i']
+    sequence_ [getArr arr i >>= printf "%d " . (*3) | i' <- [0..3], let i = fromInteger i']
     printf "\n"
     return ()
 
 testArr3 :: Prog ()
 testArr3 = do
-    arr :: Arr Word32 Int32 <- initArr [8,7,6,5]
-    sequence_ [getArr i arr >>= printf "%d " . (*3) | i' <- [0..3], let i = fromInteger i']
+    arr :: Arr Word32 Int32 <- constArr [8,7,6,5]
+    sequence_ [getArr arr i >>= printf "%d " . (*3) | i' <- [0..3], let i = fromInteger i']
     printf "\n"
     return ()
 
 testArr4 :: Prog ()
 testArr4 = do
-    arr :: Arr Word32 Int32 <- initArr [8,7,6,5]
+    arr :: Arr Word32 Int32 <- constArr [8,7,6,5]
     iarr <- freezeArr arr 4
     sequence_ [printf "%d " $ iarr #! i | i' <- [0..3], let i = fromInteger i']
     printf "\n"
 
 testArr5 :: Prog ()
 testArr5 = do
-    arr :: Arr Word32 Int32 <- initArr [8,7,6,5]
+    arr :: Arr Word32 Int32 <- constArr [8,7,6,5]
     iarr <- unsafeFreezeArr arr
     sequence_ [printf "%d " $ iarr #! i | i' <- [0..3], let i = fromInteger i']
     printf "\n"
 
 testArr6 :: Prog ()
 testArr6 = do
-    arr :: Arr Word32 Int32 <- initArr [8,7,6,5]
+    arr :: Arr Word32 Int32 <- constArr [8,7,6,5]
     iarr <- unsafeFreezeArr arr
     arr2 <- unsafeThawArr iarr
-    sequence_ [getArr i arr2 >>= printf "%d " | i <- map fromInteger [0..3]]
+    sequence_ [getArr arr2 i >>= printf "%d " | i <- map fromInteger [0..3]]
     printf "\n"
 
 testArr7 :: Prog ()
 testArr7 = do
-    arr :: Arr Word32 Int32 <- initArr [8,7,6,5]
+    arr :: Arr Word32 Int32 <- constArr [8,7,6,5]
     iarr <- freezeArr arr 4
     arr2 <- thawArr iarr 4
-    sequence_ [getArr i arr2 >>= printf "%d " | i <- map fromInteger [0..3]]
+    sequence_ [getArr arr2 i >>= printf "%d " | i <- map fromInteger [0..3]]
     printf "\n"
 
 testSwap1 :: Prog ()
 testSwap1 = do
-    arr1 :: Arr Word32 Int32 <- initArr [1,2,3,4]
-    arr2 :: Arr Word32 Int32 <- initArr [11,12,13,14]
+    arr1 :: Arr Word32 Int32 <- constArr [1,2,3,4]
+    arr2 :: Arr Word32 Int32 <- constArr [11,12,13,14]
     unsafeSwap arr1 arr2
-    sequence_ [getArr i arr1 >>= printf "%d " | i <- map fromInteger [0..3]]
+    sequence_ [getArr arr1 i >>= printf "%d " | i <- map fromInteger [0..3]]
     printf "\n"
 
 testSwap2 :: Prog ()
 testSwap2 = do
-    arr1 :: Arr Word32 Int32 <- initArr [1,2,3,4]
+    arr1 :: Arr Word32 Int32 <- constArr [1,2,3,4]
     n <- fget stdin
     arr2 :: Arr Word32 Int32 <- newArr n
     copyArr (arr2,0) (arr1,0) 4
-    setArr 2 22 arr2
+    setArr arr2 2 22
     unsafeSwap arr1 arr2
-    sequence_ [getArr i arr1 >>= printf "%d " | i <- map fromInteger [0..3]]
+    sequence_ [getArr arr1 i >>= printf "%d " | i <- map fromInteger [0..3]]
     printf "\n"
-    sequence_ [getArr i arr2 >>= printf "%d " | i <- map fromInteger [0..3]]
+    sequence_ [getArr arr2 i >>= printf "%d " | i <- map fromInteger [0..3]]
     printf "\n"
 
 testIf1 :: Prog ()
@@ -222,7 +222,7 @@ testPtr = do
     addInclude "<stdio.h>"
     p :: Ptr Int32 <- newPtr
     callProcAssign p "malloc" [valArg (100 :: CExp Word32)]
-    arr :: Arr Word32 Int32 <- initArr [34,45,56,67,78]
+    arr :: Arr Word32 Int32 <- constArr [34,45,56,67,78]
     callProc "memcpy" [ptrArg p, arrArg arr, valArg (5*4 :: CExp Word32)]  -- sizeof(int32_t) = 4
     callProc "printf" [strArg "%d\n", deref $ ptrArg p]
     iarr :: IArr Word32 Int32 <- unsafeFreezeArr =<< ptrToArr p
@@ -237,7 +237,7 @@ testArgs = do
     addDefinition ret_def
     let v = 55 :: CExp Int32
     r <- initRef (66 :: CExp Int32)
-    a :: Arr Int32 Int32 <- initArr [234..300]
+    a :: Arr Int32 Int32 <- constArr [234..300]
     ia <- freezeArr a 10
     p :: Ptr Int32 <- newPtr
     o <- newObject "int" False
