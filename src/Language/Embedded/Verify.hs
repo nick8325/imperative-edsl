@@ -703,6 +703,10 @@ instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrBinding exp i a) where
 instance (SMTEval exp a, SMTEval exp i) => Invariant (ArrBinding exp i a) where
   data Literal (ArrBinding exp i a) = LitAB
     deriving (Typeable, Eq, Ord, Show)
+
+  havoc name arr = do
+    arr' <- fresh name :: Verify (ArrBinding exp i a)
+    return arr' { arr_source = arr_source arr }
 instance (SMTEval exp a, SMTEval exp i) => IsLiteral (Literal (ArrBinding exp i a))
 
 -- A wrapper to help with fresh name generation.
@@ -776,11 +780,13 @@ updateArr :: forall exp i a.
 updateArr name update touched = do
   marr <- peekArr name
   case marr of
-    Nothing -> return ()
+    Nothing -> do
+      arr' <- fresh name
+      poke name (arr' :: ArrBinding exp i a)
     Just (arr, source, src) -> do
       age <- freshVar (name ++ ".age") tInt
       poke name (arr { arr_age = merge (touched skolemIndex) age (arr_age arr) } :: ArrBinding exp i a)
-      poke source (src { ac_age = merge (touched skolemIndex) age (ac_age src) } :: ArrContents exp i a)
+      poke source (src { ac_age = merge (touched skolemIndex) age (ac_age src), ac_value = update (ac_value src) } :: ArrContents exp i a)
 
 ----------------------------------------------------------------------
 -- Instances for the standard non-control flow command datatypes.
