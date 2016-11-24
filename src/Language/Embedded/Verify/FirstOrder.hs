@@ -219,13 +219,14 @@ instance HTraversable ThreadCMD
 ----------------------------------------------------------------------
 
 data ControlCMD fs a where
-  If     :: exp Bool -> prog () -> prog () -> ControlCMD (Param3 prog exp pred) ()
-  While  :: prog (exp Bool) -> prog () -> ControlCMD (Param3 prog exp pred) ()
-  For    :: (pred i, Integral i) => IxRange (exp i) -> Val i -> prog () -> ControlCMD (Param3 prog exp pred) ()
-  Break  :: ControlCMD (Param3 prog exp pred) ()
+  If      :: exp Bool -> prog () -> prog () -> ControlCMD (Param3 prog exp pred) ()
+  While   :: prog (exp Bool) -> prog () -> ControlCMD (Param3 prog exp pred) ()
+  For     :: (pred i, Integral i) => IxRange (exp i) -> Val i -> prog () -> ControlCMD (Param3 prog exp pred) ()
+  Break   :: ControlCMD (Param3 prog exp pred) ()
   -- The assertion turns into Nothing if it's proved
-  Assert :: Maybe (exp Bool) -> String -> ControlCMD (Param3 prog exp pred) ()
-  Hint   :: pred a => exp a -> ControlCMD (Param3 prog exp pred) ()
+  Assert  :: Maybe (exp Bool) -> String -> ControlCMD (Param3 prog exp pred) ()
+  Hint    :: pred a => exp a -> ControlCMD (Param3 prog exp pred) ()
+  Comment :: String -> ControlCMD (Param3 prog exp pred) ()
 
 instance HFunctor ControlCMD where
   hfmap f instr = runIdentity (htraverse (pure . f) instr)
@@ -237,6 +238,7 @@ instance HTraversable ControlCMD where
   htraverse _ Break = pure Break
   htraverse _ (Assert cond msg) = pure (Assert cond msg)
   htraverse _ (Hint exp) = pure (Hint exp)
+  htraverse _ (Comment msg) = pure (Comment msg)
 
 instance Defunctionalise CMD.ControlCMD where
   type FirstOrder CMD.ControlCMD = ControlCMD
@@ -248,6 +250,7 @@ instance Defunctionalise CMD.ControlCMD where
   defuncInstr CMD.Break = return Break
   defuncInstr (CMD.Assert cond msg) = return (Assert (Just cond) msg)
   defuncInstr (CMD.Hint exp) = return (Hint exp)
+  defuncInstr (CMD.Comment msg) = return (Comment msg)
 
   refuncInstr sub (If cond t e) =
     Discard (CMD.If (subst sub cond) (refunctionaliseIn sub t) (refunctionaliseIn sub e))
@@ -259,6 +262,8 @@ instance Defunctionalise CMD.ControlCMD where
       let sub' = extendSubst x y sub in
       refunctionaliseIn sub' body
   refuncInstr _ Break = Discard CMD.Break
-  refuncInstr _ (Assert Nothing _) = Skip
+  refuncInstr _ (Assert Nothing msg) =
+    Discard (CMD.Comment ("Discharged assertion: " ++ msg))
   refuncInstr sub (Assert (Just cond) msg) = Discard (CMD.Assert (subst sub cond) msg)
   refuncInstr sub (Hint exp) = Discard (CMD.Hint (subst sub exp))
+  refuncInstr sub (Comment msg) = Discard (CMD.Comment msg)

@@ -20,9 +20,11 @@ import qualified Language.C.Syntax as C
 import Control.Monad.Operational.Higher
 import Language.C.Monad
 import Language.Embedded.Expression
+import Language.Embedded.Traversal
 import Language.Embedded.Imperative.CMD
 import Language.Embedded.Imperative.Frontend.General
 import Language.Embedded.Backend.C
+import Data.Loc
 
 
 
@@ -175,6 +177,8 @@ compControlCMD (Assert cond msg) = do
     c <- compExp cond
     addStm [cstm| assert($c && $msg); |]
 compControlCMD (Hint _) = return ()
+compControlCMD (Comment msg) = do
+    addStm (C.Comment ("/* " ++ msg ++ " */") [cstm| {} |] noLoc)
 
 compPtrCMD :: PtrCMD (Param3 prog exp pred) a -> CGen a
 compPtrCMD (SwapPtr a b) = do

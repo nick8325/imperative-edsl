@@ -276,12 +276,13 @@ type IxRange i = (i, Int, Border i)
 
 data ControlCMD fs a
   where
-    If     :: exp Bool -> prog () -> prog () -> ControlCMD (Param3 prog exp pred) ()
-    While  :: prog (exp Bool) -> prog () -> ControlCMD (Param3 prog exp pred) ()
-    For    :: (pred i, Integral i) => IxRange (exp i) -> (Val i -> prog ()) -> ControlCMD (Param3 prog exp pred) ()
-    Break  :: ControlCMD (Param3 prog exp pred) ()
-    Assert :: exp Bool -> String -> ControlCMD (Param3 prog exp pred) ()
-    Hint   :: pred a => exp a -> ControlCMD (Param3 prog exp pred) ()
+    If      :: exp Bool -> prog () -> prog () -> ControlCMD (Param3 prog exp pred) ()
+    While   :: prog (exp Bool) -> prog () -> ControlCMD (Param3 prog exp pred) ()
+    For     :: (pred i, Integral i) => IxRange (exp i) -> (Val i -> prog ()) -> ControlCMD (Param3 prog exp pred) ()
+    Break   :: ControlCMD (Param3 prog exp pred) ()
+    Assert  :: exp Bool -> String -> ControlCMD (Param3 prog exp pred) ()
+    Hint    :: pred a => exp a -> ControlCMD (Param3 prog exp pred) ()
+    Comment :: String -> ControlCMD (Param3 prog exp pred) ()
 
 instance HFunctor ControlCMD
   where
@@ -291,6 +292,7 @@ instance HFunctor ControlCMD
     hfmap _ Break             = Break
     hfmap _ (Assert cond msg) = Assert cond msg
     hfmap _ (Hint exp)        = Hint exp
+    hfmap _ (Comment msg)     = Comment msg
 
 instance HBifunctor ControlCMD
   where
@@ -300,6 +302,7 @@ instance HBifunctor ControlCMD
     hbimap _ _ Break                   = Break
     hbimap _ g (Assert cond msg)       = Assert (g cond) msg
     hbimap _ g (Hint exp)              = Hint (g exp)
+    hbimap _ _ (Comment msg)           = Comment msg
 
 instance (ControlCMD :<: instr) => Reexpressible ControlCMD instr env
   where
@@ -319,6 +322,7 @@ instance (ControlCMD :<: instr) => Reexpressible ControlCMD instr env
     reexpressInstrEnv reexp Break             = lift $ singleInj Break
     reexpressInstrEnv reexp (Assert cond msg) = lift . singleInj . flip Assert msg =<< reexp cond
     reexpressInstrEnv reexp (Hint exp)        = lift . singleInj . Hint =<< reexp exp
+    reexpressInstrEnv reexp (Comment msg)     = lift $ singleInj (Comment msg)
 
 instance DryInterp ControlCMD
   where
@@ -328,6 +332,7 @@ instance DryInterp ControlCMD
     dryInterp Break        = return ()
     dryInterp (Assert _ _) = return ()
     dryInterp (Hint _)     = return ()
+    dryInterp (Comment _)  = return ()
 
 
 
@@ -732,6 +737,7 @@ runControlCMD (Assert cond msg) = do
     cond' <- cond
     unless cond' $ error $ "Assertion failed: " ++ msg
 runControlCMD (Hint _) = return ()
+runControlCMD (Comment _) = return ()
 
 runPtrCMD :: PtrCMD (Param3 IO IO pred) a -> IO a
 runPtrCMD (SwapPtr (ArrRun arr1) (ArrRun arr2)) = do

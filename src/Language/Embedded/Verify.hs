@@ -969,6 +969,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr PtrCMD (exp :: * -> *) p
 ----------------------------------------------------------------------
 
 instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => VerifyInstr ControlCMD exp pred where
+  verifyInstr (Comment msg) () = return (Comment msg)
   verifyInstr (Assert Nothing msg) () =
     return (Assert Nothing msg)
   verifyInstr (Assert (Just cond) msg) () = do
