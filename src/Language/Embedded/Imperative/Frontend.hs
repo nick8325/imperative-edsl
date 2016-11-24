@@ -116,21 +116,21 @@ newNamedArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
     -> ProgramT instr (Param2 exp pred) m (Arr i a)
 newNamedArr base len = singleInj (NewArr base len)
 
--- | Create and initialize an array
-initArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
+-- | Create an array and initialize it with a constant list
+constArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
     => [a]  -- ^ Initial contents
     -> ProgramT instr (Param2 exp pred) m (Arr i a)
-initArr = initNamedArr "a"
+constArr = constNamedArr "a"
 
--- | Create and initialize a named array
+-- | Create a named array and initialize it with a constant list
 --
 -- The provided base name may be appended with a unique identifier to avoid name
 -- collisions.
-initNamedArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
+constNamedArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr)
     => String  -- ^ Base name
     -> [a]     -- ^ Initial contents
     -> ProgramT instr (Param2 exp pred) m (Arr i a)
-initNamedArr base init = singleInj (InitArr base init)
+constNamedArr base init = singleInj (ConstArr base init)
 
 -- | Get an element of an array
 getArr
@@ -143,13 +143,13 @@ getArr
        , ArrCMD :<: instr
        , Monad m
        )
-    => exp i -> Arr i a -> ProgramT instr (Param2 exp pred) m (exp a)
-getArr i arr = fmap valToExp $ singleInj $ GetArr i arr
+    => Arr i a -> exp i -> ProgramT instr (Param2 exp pred) m (exp a)
+getArr arr i = fmap valToExp $ singleInj $ GetArr arr i
 
 -- | Set an element of an array
 setArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr) =>
-    exp i -> exp a -> Arr i a -> ProgramT instr (Param2 exp pred) m ()
-setArr i a arr = singleInj (SetArr i a arr)
+    Arr i a -> exp i -> exp a -> ProgramT instr (Param2 exp pred) m ()
+setArr arr i a = singleInj (SetArr arr i a)
 
 -- | Copy the contents of an array to another array. The number of elements to
 -- copy must not be greater than the number of allocated elements in either
@@ -197,12 +197,6 @@ thawArr arr n = do
 unsafeThawArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr) =>
     IArr i a -> ProgramT instr (Param2 exp pred) m (Arr i a)
 unsafeThawArr arr = singleInj $ UnsafeThawArr arr
-
--- | Create and initialize an immutable array
-initIArr :: (pred a, pred i, Integral i, Ix i, ArrCMD :<: instr, Monad m) =>
-    [a] -> ProgramT instr (Param2 exp pred) m (IArr i a)
-initIArr = unsafeFreezeArr <=< initArr
-
 
 
 --------------------------------------------------------------------------------

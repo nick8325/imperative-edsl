@@ -18,6 +18,7 @@ import Data.Constraint(Constraint, Dict(..))
 import Control.Monad.RWS.Strict
 import Control.Monad.Exception
 import Data.Maybe
+import Data.Array
 
 import Data.ALaCarte
 import Language.Embedded.Imperative.CMD hiding (ControlCMD(..))
@@ -853,7 +854,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
       newArr name n :: Verify (SMTArray exp i a)
       return ()
 
-  verifyInstr instr@(InitArr _ xs) arr@(ArrComp name :: Arr i a)
+  verifyInstr instr@(ConstArr _ xs) arr@(ArrComp name :: Arr i a)
     | Dict <- witnessPred (undefined :: exp i),
       Dict <- witnessNum (undefined :: exp i),
       Dict <- witnessOrd (undefined :: exp i) =
@@ -872,7 +873,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
       forM_ (zip is ys) $ \(i, x) ->
         assume "array initialisation" (selectArray arr i .==. x)
 
-  verifyInstr instr@(GetArr ix (ArrComp arrName :: Arr i a)) (ValComp valName)
+  verifyInstr instr@(GetArr (ArrComp arrName :: Arr i a) ix) (ValComp valName)
     | Dict <- witnessPred (undefined :: exp i),
       Dict <- witnessOrd  (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
@@ -880,7 +881,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
       val <- readArr arrName ix
       pokeVal valName (val :: SMTExpr exp a)
 
-  verifyInstr instr@(SetArr ix val (ArrComp arrName :: Arr i a)) ()
+  verifyInstr instr@(SetArr (ArrComp arrName :: Arr i a) ix val) ()
     | Dict <- witnessPred (undefined :: exp i),
       Dict <- witnessOrd  (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
