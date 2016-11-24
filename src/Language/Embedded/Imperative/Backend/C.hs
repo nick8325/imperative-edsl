@@ -178,7 +178,7 @@ compControlCMD (Assert cond msg) = do
     addStm [cstm| assert($c && $msg); |]
 compControlCMD (Hint _) = return ()
 compControlCMD (Comment msg) = do
-    addStm (C.Comment ("/* " ++ msg ++ " */") [cstm| {} |] noLoc)
+    addStm (C.EscStm ("/* " ++ msg ++ " */") noLoc)
 
 compPtrCMD :: PtrCMD (Param3 prog exp pred) a -> CGen a
 compPtrCMD (SwapPtr a b) = do

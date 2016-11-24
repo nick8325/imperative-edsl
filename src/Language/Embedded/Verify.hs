@@ -227,6 +227,12 @@ hintFormula exp = tell ([], [], [HintBody exp tBool],[])
 noWarn :: Verify a -> Verify a
 noWarn = censor (\(breaks, _, hints, decls) -> (breaks, [], hints, decls))
 
+-- Run a computation and get its warnings.
+getWarns :: Verify a -> Verify (a, [String])
+getWarns mx = do
+  (x, (_, warns, _, _)) <- listen mx
+  return (x, warns)
+
 -- Run a computation more chattily.
 chattily :: Verify a -> Verify a
 chattily = local (\(ctx, n, prove) -> (ctx, n+1, prove))
@@ -255,17 +261,18 @@ class Verifiable prog where
 verify :: Verifiable prog => prog a -> Verify (prog a)
 verify = fmap fst . verifyWithResult
 
-instance (VerifyInstr (FirstOrder prog) exp pred, TypeablePred pred, Substitute exp, SubstPred exp ~ pred, pred Bool, Defunctionalise prog) => Verifiable (Program prog (Param2 exp pred)) where
+instance (VerifyInstr (FirstOrder prog) exp pred, ControlCMD :<: FirstOrder prog, TypeablePred pred, Substitute exp, SubstPred exp ~ pred, pred Bool, Defunctionalise prog) => Verifiable (Program prog (Param2 exp pred)) where
   verifyWithResult prog = do
     (prog', res) <- verifyWithResult (defunctionalise prog)
     return (refunctionalise prog', res)
 
-instance VerifyInstr prog exp pred => Verifiable (Prog prog (Param2 exp pred)) where
+instance (VerifyInstr prog exp pred, ControlCMD :<: prog) => Verifiable (Prog prog (Param2 exp pred)) where
   verifyWithResult (Return x)   = return (Return x, x)
   verifyWithResult (Bind x m k) = do
-    (m', breaks) <- withBreaks (verifyInstr m x)
+    ((m', breaks), warns) <- noWarn (getWarns (withBreaks (verifyInstr m x)))
     (_, (k', res)) <- ite breaks (return ()) (verifyWithResult k)
-    return (Bind x m' k', res)
+    let comment msg prog = Bind () (inj (Comment msg)) prog
+    return (foldr comment (Bind x m' k') warns, res)
 
 -- A typeclass for instructions which can be symbolically executed.
 class VerifyInstr instr exp pred where
