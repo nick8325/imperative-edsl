@@ -263,7 +263,7 @@ instance Defunctionalise CMD.ControlCMD where
       refunctionaliseIn sub' body
   refuncInstr _ Break = Discard CMD.Break
   refuncInstr _ (Assert Nothing msg) =
-    Discard (CMD.Comment ("Discharged assertion: " ++ msg))
+    Discard (CMD.Comment ("Discharged assertion \"" ++ msg ++ "\""))
   refuncInstr sub (Assert (Just cond) msg) = Discard (CMD.Assert (subst sub cond) msg)
   refuncInstr sub (Hint exp) = Discard (CMD.Hint (subst sub exp))
   refuncInstr sub (Comment msg) = Discard (CMD.Comment msg)
