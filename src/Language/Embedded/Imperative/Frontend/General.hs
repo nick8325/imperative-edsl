@@ -10,7 +10,6 @@ module Language.Embedded.Imperative.Frontend.General
   , IArr
   , Border (..)
   , IxRange
-  , IsPointer
   , IO.IOMode (..)
   , Handle
   , stdin

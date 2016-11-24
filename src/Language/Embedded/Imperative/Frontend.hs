@@ -283,8 +283,8 @@ hint exp = singleInj $ Hint exp
 --
 -- The 'IsPointer' class ensures that the operation is only possible for types
 -- that are represented as pointers in C.
-unsafeSwap :: (IsPointer a, PtrCMD :<: instr) =>
-    a -> a -> ProgramT instr (Param2 exp pred) m ()
+unsafeSwap :: (Typeable i, Typeable a, pred i, pred a, Ix i, Integral i, PtrCMD :<: instr) =>
+    Arr i a -> Arr i a -> ProgramT instr (Param2 exp pred) m ()
 unsafeSwap a b = singleInj $ SwapPtr a b
 
 

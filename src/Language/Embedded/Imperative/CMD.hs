@@ -23,8 +23,6 @@ module Language.Embedded.Imperative.CMD
   , IxRange
   , ControlCMD (..)
     -- * Generic pointer manipulation
-  , IsPointer (..)
-  , PointerType (..)
   , PtrCMD (..)
     -- * File handling
   , Handle (..)
@@ -334,39 +332,12 @@ instance DryInterp ControlCMD
 
 
 --------------------------------------------------------------------------------
--- * Generic pointer manipulation
+-- * Pointer manipulation
 --------------------------------------------------------------------------------
 
--- The reason for not implementing `SwapPtr` using the `Ptr` type is that it's
--- (currently) not possible to interpret `Ptr` in `IO`.
-
--- | Types that are represented as a pointers in C
-class (Typeable a, ToIdent a) => IsPointer a
+data PtrCMD fs b
   where
-    runSwapPtr :: a -> a -> IO ()
-    whatPtr :: PointerType a
-
-data PointerType a where
-  ArrPointerType :: (Typeable i, Typeable a) => PointerType (Arr i a)
-  PtrPointerType :: Typeable a => PointerType (Ptr a)
-
-instance (Typeable i, Typeable a) => IsPointer (Arr i a)
-  where
-    runSwapPtr (ArrRun arr1) (ArrRun arr2) = do
-        arr1' <- readIORef arr1
-        arr2' <- readIORef arr2
-        writeIORef arr1 arr2'
-        writeIORef arr2 arr1'
-    whatPtr = ArrPointerType
-
-instance Typeable a => IsPointer (Ptr a)
-  where
-    runSwapPtr = error "cannot run SwapPtr for Ptr"
-    whatPtr = PtrPointerType
-
-data PtrCMD fs a
-  where
-    SwapPtr :: IsPointer a => a -> a -> PtrCMD (Param3 prog exp pred) ()
+    SwapPtr :: (Typeable i, Typeable a, pred i, pred a, Ix i, Integral i) => Arr i a -> Arr i a -> PtrCMD (Param3 prog exp pred) ()
 
 instance HFunctor   PtrCMD where hfmap _    (SwapPtr a b) = SwapPtr a b
 instance HBifunctor PtrCMD where hbimap _ _ (SwapPtr a b) = SwapPtr a b
@@ -378,7 +349,6 @@ instance (PtrCMD :<: instr) => Reexpressible PtrCMD instr env
 instance DryInterp PtrCMD
   where
     dryInterp (SwapPtr _ _) = return ()
-
 
 
 --------------------------------------------------------------------------------
@@ -764,7 +734,11 @@ runControlCMD (Assert cond msg) = do
 runControlCMD (Hint _) = return ()
 
 runPtrCMD :: PtrCMD (Param3 IO IO pred) a -> IO a
-runPtrCMD (SwapPtr a b) = runSwapPtr a b
+runPtrCMD (SwapPtr (ArrRun arr1) (ArrRun arr2)) = do
+  arr1' <- readIORef arr1
+  arr2' <- readIORef arr2
+  writeIORef arr1 arr2'
+  writeIORef arr2 arr1'
 
 runHandle :: Handle -> IO.Handle
 runHandle (HandleRun h)         = h
