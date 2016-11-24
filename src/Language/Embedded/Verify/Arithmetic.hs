@@ -48,8 +48,10 @@ instance (Sign s, Width w) => Num (BV s w) where
     BV (ite b (unBV (x * BV y)) (unBV (x * BV z)))
   x * y | x == 0 || y == 0 = 0
   x * y | x == 1 = y
+  x * y | x == 2 = y + y
   x * y | y == 1 = x
-  BV x * BV y = BV (bvMul x y)
+  x * y | y == 2 = x + x
+  BV x * BV y = error "no"
   negate (BV x) = BV (bvNeg x)
   abs = smtAbs
   signum = smtSignum
@@ -61,9 +63,10 @@ instance (Sign s, Width w) => Real (BV s w) where
   toRational = error "no toRational for BV"
 instance (Sign s, Width w) => Integral (BV s w) where
   toInteger = error "no toInteger for BV"
-  n0@(BV n) `quotRem` BV d
-    | isSigned n0 = (BV (bvSDiv n d), BV (bvSRem n d))
-    | otherwise   = (BV (bvUDiv n d), BV (bvURem n d))
+  n0@(BV n) `quotRem` d0@(BV d)
+    | d0 == 1 = (n0, 0)
+    | d0 == 2 = (shiftR n0 2, n0 .&. 1)
+    | otherwise = error "no"
 
 -- A slightly lighter version of Data.Bits.
 class Bits a where

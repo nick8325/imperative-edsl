@@ -79,7 +79,7 @@ type Verify = RWST ([SExpr], Int, Mode) ([SExpr], [String], [HintBody], [String]
 data Mode = Prove | Execute deriving Eq
 
 runVerify :: Verify a -> IO (a, [String])
-runVerify m = runZ3 ["-t:1000"] $ do
+runVerify m = runZ3 [] $ do
   SMT.setOption ":produce-models" "false"
   (x, (_, warns, _, _)) <- evalRWST m ([], 0, Prove) Map.empty
   return (x, warns)
