@@ -157,11 +157,11 @@ instance Defunctionalise RefCMD where
 
 instance Defunctionalise ArrCMD where
   refuncInstr sub (NewArr name n) = keep2 (NewArr name (subst sub n))
-  refuncInstr sub (InitArr name xs) = keep2 (InitArr name xs)
-  refuncInstr sub (GetArr i arr) =
-    refunc2 arr (Keep (GetArr (subst sub i) (lookupSubst sub arr)))
-  refuncInstr sub (SetArr i x arr) =
-    refunc2 arr (Discard (SetArr (subst sub i) (subst sub x) (lookupSubst sub arr)))
+  refuncInstr sub (ConstArr name xs) = keep2 (ConstArr name xs)
+  refuncInstr sub (GetArr arr i) =
+    refunc2 arr (Keep (GetArr (lookupSubst sub arr) (subst sub i)))
+  refuncInstr sub (SetArr arr i x) =
+    refunc2 arr (Discard (SetArr (lookupSubst sub arr) (subst sub i) (subst sub x)))
   refuncInstr sub (CopyArr (arr1, i) (arr2, j) n) =
     refunc2 arr1 (Discard (CopyArr (lookupSubst sub arr1, subst sub i) (lookupSubst sub arr2, subst sub j) (subst sub n)))
   refuncInstr sub (UnsafeFreezeArr arr) =

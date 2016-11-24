@@ -783,7 +783,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
       poke name arr'
       poke name (ArrBinding arr')
 
-  verifyInstr instr@(InitArr _ xs) arr@(ArrComp name :: Arr i a)
+  verifyInstr instr@(ConstArr _ xs) arr@(ArrComp name :: Arr i a)
     | Dict <- witnessPred (undefined :: exp i),
       Dict <- witnessNum (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
@@ -806,14 +806,14 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr ArrCMD exp pred where
       poke name arr'
       poke name (ArrBinding arr')
 
-  verifyInstr instr@(GetArr ix (ArrComp arrName :: Arr i a)) (ValComp valName)
+  verifyInstr instr@(GetArr (ArrComp arrName :: Arr i a) ix) (ValComp valName)
     | Dict <- witnessPred (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
       ix  <- eval ix
       val <- readArr arrName ix
       pokeVal valName (val :: SMTExpr exp a)
 
-  verifyInstr instr@(SetArr ix val (ArrComp arrName :: Arr i a)) ()
+  verifyInstr instr@(SetArr (ArrComp arrName :: Arr i a) ix val) ()
     | Dict <- witnessPred (undefined :: exp i) =
     withWitness (undefined :: a) instr $ do
       ix  <- eval ix
