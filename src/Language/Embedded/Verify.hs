@@ -261,17 +261,18 @@ class Verifiable prog where
 verify :: Verifiable prog => prog a -> Verify (prog a)
 verify = fmap fst . verifyWithResult
 
-instance (VerifyInstr (FirstOrder prog) exp pred, ControlCMD :<: FirstOrder prog, TypeablePred pred, Substitute exp, SubstPred exp ~ pred, pred Bool, Defunctionalise prog) => Verifiable (Program prog (Param2 exp pred)) where
+instance (VerifyInstr (FirstOrder [SomeLiteral] prog) exp pred, ControlCMD [SomeLiteral] :<: FirstOrder [SomeLiteral] prog, TypeablePred pred, Substitute exp, SubstPred exp ~ pred, pred Bool, Defunctionalise [SomeLiteral] prog) => Verifiable (Program prog (Param2 exp pred)) where
   verifyWithResult prog = do
-    (prog', res) <- verifyWithResult (defunctionalise prog)
-    return (refunctionalise prog', res)
+    let inv = undefined :: [SomeLiteral]
+    (prog', res) <- verifyWithResult (defunctionalise inv prog)
+    return (refunctionalise inv prog', res)
 
-instance (VerifyInstr prog exp pred, ControlCMD :<: prog) => Verifiable (Prog prog (Param2 exp pred)) where
-  verifyWithResult (Return x)   = return (Return x, x)
+instance (VerifyInstr prog exp pred, ControlCMD [SomeLiteral] :<: prog) => Verifiable (Prog prog (Param2 exp pred)) where
+  verifyWithResult (Return x) = return (Return x, x)
   verifyWithResult (Bind x m k) = do
     ((m', breaks), warns) <- noWarn (getWarns (withBreaks (verifyInstr m x)))
     (_, (k', res)) <- ite breaks (return ()) (verifyWithResult k)
-    let comment msg prog = Bind () (inj (Comment msg)) prog
+    let comment msg prog = Bind () (inj (Comment msg :: ControlCMD [SomeLiteral] (Param3 (Prog prog (Param2 exp pred)) exp pred) ())) prog
     return (foldr comment (Bind x m' k') warns, res)
 
 -- A typeclass for instructions which can be symbolically executed.
@@ -986,7 +987,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr PtrCMD (exp :: * -> *) p
 -- An instance for ControlCMD - where the magic happens
 ----------------------------------------------------------------------
 
-instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => VerifyInstr ControlCMD exp pred where
+instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => VerifyInstr (ControlCMD [SomeLiteral]) exp pred where
   verifyInstr (Comment msg) () = return (Comment msg)
   verifyInstr (Assert Nothing msg) () =
     return (Assert Nothing msg)
@@ -1011,21 +1012,21 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
     hintFormula (toSMT b)
     hintFormula (SMT.not (toSMT b))
     return (If cond t' e')
-  verifyInstr (While cond body) () = do
+  verifyInstr (While inv cond body) () = do
     let
       loop = do
         res <- verifyWithResult cond >>= eval . snd
         ite (toSMT res) (verify body) break
         return ()
-    finished <- discoverInvariant loop
+    (finished, inv') <- discoverInvariant inv loop
     (cond', body') <- stack $ do
       (cond', res) <- verifyWithResult cond
       eval res >>= assume "loop guard" . toSMT
       body' <- verify body
       return (cond', body')
     finished
-    return (While cond' body')
-  verifyInstr (For range@(lo, step, hi) val@(ValComp name :: Val a) body) ()
+    return (While inv' cond' body')
+  verifyInstr (For inv range@(lo, step, hi) val@(ValComp name :: Val a) body) ()
     | Dict <- witnessPred (undefined :: exp a),
       Dict <- witnessNum (undefined :: exp a),
       Dict <- witnessOrd (undefined :: exp a) = do
@@ -1049,10 +1050,10 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
       m <- eval lo
       newRef name (undefined :: exp a)
       setRef name m
-      finished <- discoverInvariant loop
+      (finished, inv') <- discoverInvariant inv loop
       body' <- stack (cond >>= assume "loop guard" >> verify body)
       finished
-      return (For range val body')
+      return (For inv' range val body')
 
 -- The literals used in predicate abstraction.
 data SomeLiteral = forall a. IsLiteral a => SomeLiteral a
@@ -1071,8 +1072,8 @@ instance Show SomeLiteral where show (SomeLiteral x) = show x
 -- Leaves the verifier in a state which represents an arbitrary loop iteration.
 -- Returns a value which when run leaves the verifier in a state where the loop
 -- has terminated.
-discoverInvariant :: Verify () -> Verify (Verify ())
-discoverInvariant body = do
+discoverInvariant :: [[SomeLiteral]] -> Verify () -> Verify (Verify (), [[SomeLiteral]])
+discoverInvariant inv body = do
   (frame, hints) <- findFrameAndHints
   (_, _, mode) <- ask
   case mode of
@@ -1080,8 +1081,8 @@ discoverInvariant body = do
       ctx <- get
       abstract ctx frame hints >>= refine frame hints
     Execute -> do
-      assumeLiterals frame []
-      return (noBreak (breaks body) >>= assume "loop terminated")
+      assumeLiterals frame inv
+      return (noBreak (breaks body) >>= assume "loop terminated", inv)
   where
     -- Suppose we have a while-loop while(E) S, and we know a formula
     -- I(0) which describes the initial state of the loop.
@@ -1174,7 +1175,7 @@ discoverInvariant body = do
       if clauses == clauses' then do
         printInvariant "Invariant" frame clauses
         assumeLiterals frame clauses
-        return (noBreak (breaks body) >>= assume "loop terminated")
+        return (noBreak (breaks body) >>= assume "loop terminated", clauses)
       else refine frame hints clauses'
 
     assumeLiterals :: [(Name, Entry)] -> [[SomeLiteral]] -> Verify ()
@@ -1193,7 +1194,7 @@ discoverInvariant body = do
       ctx <- get
       res <- quietly $ fmap concat $ mapM (Abstract.abstract (\clause -> (evalClause old >=> provable (show clause)) clause)) (lits frame ctx)
       printInvariant "Candidate invariant" frame res
-      return res
+      return (inv ++ res)
       where
         lits frame ctx =
           partitionBy (\(SomeLiteral x) -> phase x) $
