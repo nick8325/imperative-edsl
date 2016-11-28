@@ -1158,7 +1158,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
         forM_ lits (\(SomeLiteral lit) -> assume "magic safety invariant" (smtLit old ctx lit))
         cond >>= assume "loop guard" >> verify body
       finished
-      return (For inv range val body)
+      return (For (fmap (++ map return lits') inv) range val body)
 
 -- The literals used in predicate abstraction.
 data SomeLiteral = forall a. IsLiteral a => SomeLiteral a
