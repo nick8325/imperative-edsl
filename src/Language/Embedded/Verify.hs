@@ -75,14 +75,24 @@ import qualified Language.Embedded.Verify.SMT as SMT
 --        list of hints given;
 --        list of names generated (must not appear in hints)
 -- State: the context, a map from variables to SMT values
-type Verify = RWST ([SExpr], Int, Mode) ([SExpr], [String], [HintBody], [String]) Context SMT
+type Verify = RWST ([SExpr], Int, Mode) ([SExpr], Warns, [HintBody], [String]) Context SMT
 data Mode = Prove | ProveAndWarn | Execute deriving Eq
+data Warns =
+  Warns {
+    warns_here :: [String],
+    warns_all  :: [String] }
+instance Monoid Warns where
+  mempty = Warns [] []
+  w1 `mappend` w2 =
+    Warns
+      (warns_here w1 `mappend` warns_here w2)
+      (warns_all w1 `mappend` warns_all w2)
 
 runVerify :: Verify a -> IO (a, [String])
 runVerify m = runZ3 [] $ do
   SMT.setOption ":produce-models" "false"
   (x, (_, warns, _, _)) <- evalRWST m ([], 0, ProveAndWarn) Map.empty
-  return (x, warns)
+  return (x, warns_all warns)
 
 -- Run a computation without proving anything.
 quickly :: Verify a -> Verify a
@@ -181,7 +191,7 @@ ite p mx my = do
     break
       | null break1 && null break2 = []
       | otherwise = [SMT.ite p (disj break1) (disj break2)]
-  tell (break, warns1 ++ warns2, hints1 ++ hints2, decls1 ++ decls2)
+  tell (break, warns1 `mappend` warns2, hints1 ++ hints2, decls1 ++ decls2)
   return (x, y)
 
 -- Read the current branch.
@@ -202,7 +212,7 @@ poke name val = modify (insertContext name val)
 break :: Verify ()
 break = do
   branch <- branch
-  tell ([conj branch], [], [], [])
+  tell ([conj branch], mempty, [], [])
 
 -- Check if execution of a statement can break.
 withBreaks :: Verify a -> Verify (a, SExpr)
@@ -221,14 +231,14 @@ noBreak = censor (\(_, warns, hints, decls) -> ([], warns, hints, decls))
 
 -- Add a warning to the output.
 warn :: String -> Verify ()
-warn msg = warning () $ tell ([], [msg], [], [])
+warn msg = warning () $ tell ([], Warns [msg] [msg], [], [])
 
 -- Add a hint to the output.
 hint :: TypedSExpr a => a -> Verify ()
-hint exp = tell ([], [], [HintBody (toSMT exp) (smtType exp)], [])
+hint exp = tell ([], mempty, [HintBody (toSMT exp) (smtType exp)], [])
 
 hintFormula :: SExpr -> Verify ()
-hintFormula exp = tell ([], [], [HintBody exp tBool],[])
+hintFormula exp = tell ([], mempty, [HintBody exp tBool],[])
 
 -- Run a computation but ignoring its warnings.
 noWarn :: Verify a -> Verify a
@@ -239,13 +249,13 @@ noWarn =
     f x = x
 
 swallowWarns :: Verify a -> Verify a
-swallowWarns = censor (\(x, _, y, z) -> (x, [], y, z))
+swallowWarns = censor (\(x, ws, y, z) -> (x, ws { warns_here = [] }, y, z))
 
 -- Run a computation and get its warnings.
 getWarns :: Verify a -> Verify (a, [String])
 getWarns mx = do
   (x, (_, warns, _, _)) <- listen mx
-  return (x, warns)
+  return (x, warns_here warns)
 
 -- Run a computation more chattily.
 chattily :: Verify a -> Verify a
@@ -372,10 +382,11 @@ class Fresh a where
   -- The String argument is a hint for making pretty names.
   fresh :: String -> Verify a
 
+freshVar :: String -> SExpr -> Verify SExpr
 freshVar name ty = do
   n <- lift freshNum
   let x = name ++ "." ++ show n
-  tell ([], [], [], [x])
+  tell ([], mempty, [], [x])
   lift $ declare x ty
 
 -- A typeclass for values that can undergo predicate abstraction.
