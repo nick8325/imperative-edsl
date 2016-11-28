@@ -220,8 +220,8 @@ instance HTraversable ThreadCMD
 
 data ControlCMD inv fs a where
   If      :: exp Bool -> prog () -> prog () -> ControlCMD inv (Param3 prog exp pred) ()
-  While   :: [inv] -> prog (exp Bool) -> prog () -> ControlCMD inv (Param3 prog exp pred) ()
-  For     :: (pred i, Integral i) => [inv] -> IxRange (exp i) -> Val i -> prog () -> ControlCMD inv (Param3 prog exp pred) ()
+  While   :: Maybe inv -> prog (exp Bool) -> prog () -> ControlCMD inv (Param3 prog exp pred) ()
+  For     :: (pred i, Integral i) => Maybe inv -> IxRange (exp i) -> Val i -> prog () -> ControlCMD inv (Param3 prog exp pred) ()
   Break   :: ControlCMD inv (Param3 prog exp pred) ()
   -- The assertion turns into Nothing if it's proved
   Assert  :: Maybe (exp Bool) -> String -> ControlCMD inv (Param3 prog exp pred) ()
@@ -243,10 +243,10 @@ instance HTraversable (ControlCMD inv) where
 instance Defunctionalise inv CMD.ControlCMD where
   type FirstOrder inv CMD.ControlCMD = ControlCMD inv
   defuncInstr _ (CMD.If cond t f) = return (If cond t f)
-  defuncInstr _ (CMD.While cond body) = return (While [] cond body)
+  defuncInstr _ (CMD.While cond body) = return (While Nothing cond body)
   defuncInstr _ (CMD.For range body) = do
     i <- fmap ValComp (freshStr "v")
-    return (For [] range i (body i))
+    return (For Nothing range i (body i))
   defuncInstr _ CMD.Break = return Break
   defuncInstr _ (CMD.Assert cond msg) = return (Assert (Just cond) msg)
   defuncInstr _ (CMD.Hint exp) = return (Hint exp)

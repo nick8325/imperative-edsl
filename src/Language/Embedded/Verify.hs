@@ -76,12 +76,12 @@ import qualified Language.Embedded.Verify.SMT as SMT
 --        list of names generated (must not appear in hints)
 -- State: the context, a map from variables to SMT values
 type Verify = RWST ([SExpr], Int, Mode) ([SExpr], [String], [HintBody], [String]) Context SMT
-data Mode = Prove | Execute deriving Eq
+data Mode = Prove | ProveAndWarn | Execute deriving Eq
 
 runVerify :: Verify a -> IO (a, [String])
 runVerify m = runZ3 [] $ do
   SMT.setOption ":produce-models" "false"
-  (x, (_, warns, _, _)) <- evalRWST m ([], 0, Prove) Map.empty
+  (x, (_, warns, _, _)) <- evalRWST m ([], 0, ProveAndWarn) Map.empty
   return (x, warns)
 
 -- Run a computation without proving anything.
@@ -93,8 +93,15 @@ proving :: a -> Verify a -> Verify a
 proving def mx = do
   (_, _, mode) <- ask
   case mode of
-    Prove   -> mx
-    Execute -> return def
+    Prove        -> mx
+    ProveAndWarn -> mx
+    Execute      -> return def
+
+-- Only run a computation if we are supposed to be warning.
+warning :: Verify () -> Verify ()
+warning mx = do
+  (_, _, mode) <- ask
+  when (mode == ProveAndWarn) mx
 
 -- Assume that a given formula is true.
 assume :: String -> SExpr -> Verify ()
@@ -214,7 +221,7 @@ noBreak = censor (\(_, warns, hints, decls) -> ([], warns, hints, decls))
 
 -- Add a warning to the output.
 warn :: String -> Verify ()
-warn msg = tell ([], [msg], [], [])
+warn msg = warning $ tell ([], [msg], [], [])
 
 -- Add a hint to the output.
 hint :: TypedSExpr a => a -> Verify ()
@@ -225,7 +232,14 @@ hintFormula exp = tell ([], [], [HintBody exp tBool],[])
 
 -- Run a computation but ignoring its warnings.
 noWarn :: Verify a -> Verify a
-noWarn = censor (\(breaks, _, hints, decls) -> (breaks, [], hints, decls))
+noWarn =
+  local (\(x, y, mode) -> (x, y, f mode))
+  where
+    f ProveAndWarn = Prove
+    f x = x
+
+swallowWarns :: Verify a -> Verify a
+swallowWarns = censor (\(x, _, y, z) -> (x, [], y, z))
 
 -- Run a computation and get its warnings.
 getWarns :: Verify a -> Verify (a, [String])
@@ -261,18 +275,18 @@ class Verifiable prog where
 verify :: Verifiable prog => prog a -> Verify (prog a)
 verify = fmap fst . verifyWithResult
 
-instance (VerifyInstr (FirstOrder [SomeLiteral] prog) exp pred, ControlCMD [SomeLiteral] :<: FirstOrder [SomeLiteral] prog, TypeablePred pred, Substitute exp, SubstPred exp ~ pred, pred Bool, Defunctionalise [SomeLiteral] prog) => Verifiable (Program prog (Param2 exp pred)) where
+instance (VerifyInstr (FirstOrder [[SomeLiteral]] prog) exp pred, ControlCMD [[SomeLiteral]] :<: FirstOrder [[SomeLiteral]] prog, TypeablePred pred, Substitute exp, SubstPred exp ~ pred, pred Bool, Defunctionalise [[SomeLiteral]] prog) => Verifiable (Program prog (Param2 exp pred)) where
   verifyWithResult prog = do
-    let inv = undefined :: [SomeLiteral]
+    let inv = undefined :: [[SomeLiteral]]
     (prog', res) <- verifyWithResult (defunctionalise inv prog)
     return (refunctionalise inv prog', res)
 
-instance (VerifyInstr prog exp pred, ControlCMD [SomeLiteral] :<: prog) => Verifiable (Prog prog (Param2 exp pred)) where
+instance (VerifyInstr prog exp pred, ControlCMD [[SomeLiteral]] :<: prog) => Verifiable (Prog prog (Param2 exp pred)) where
   verifyWithResult (Return x) = return (Return x, x)
   verifyWithResult (Bind x m k) = do
-    ((m', breaks), warns) <- noWarn (getWarns (withBreaks (verifyInstr m x)))
+    ((m', breaks), warns) <- swallowWarns (getWarns (withBreaks (verifyInstr m x)))
     (_, (k', res)) <- ite breaks (return ()) (verifyWithResult k)
-    let comment msg prog = Bind () (inj (Comment msg :: ControlCMD [SomeLiteral] (Param3 (Prog prog (Param2 exp pred)) exp pred) ())) prog
+    let comment msg prog = Bind () (inj (Comment msg :: ControlCMD [[SomeLiteral]] (Param3 (Prog prog (Param2 exp pred)) exp pred) ())) prog
     return (foldr comment (Bind x m' k') warns, res)
 
 -- A typeclass for instructions which can be symbolically executed.
@@ -373,8 +387,18 @@ class (IsLiteral (Literal a), Fresh a) => Invariant a where
   havoc name _ = fresh name
 
   -- Return a list of candidate literals for a value.
-  literals :: Context -> String -> a -> [Literal a]
-  literals _ _ _ = []
+  literals :: String -> a -> [Literal a]
+  literals _ _ = []
+
+  warns1, warns2 :: Context -> String -> a -> a
+  warns1 _ _ x = x
+  warns2 _ _ x = x
+
+  warnLiterals :: String -> a -> [(Literal a, SExpr)]
+  warnLiterals _ _ = []
+
+  warnLiterals2 :: String -> a -> [Literal a]
+  warnLiterals2 _ _ = []
 
 class (Ord a, Typeable a, Show a) => IsLiteral a where
   -- Evaluate a literal.
@@ -572,12 +596,13 @@ instance SMTEval exp a => Exprs (ValBinding exp a) where
 peekVal :: forall exp a. SMTEval exp a => String -> Verify (SMTExpr exp a)
 peekVal name = do
   ValBinding val ref <- peek name
-  case ref of
-    Nothing -> return ()
-    Just refName -> do
-      ref <- peek refName :: Verify (RefBinding exp a)
-      safe <- provable "reference not frozen" (val .==. rb_value ref)
-      unless safe (warn ("Unsafe use of frozen reference " ++ name))
+  warning $
+    case ref of
+      Nothing -> return ()
+      Just refName -> do
+        ref <- peek refName :: Verify (RefBinding exp a)
+        safe <- provable "reference not frozen" (val .==. rb_value ref)
+        unless safe (warn ("Unsafe use of frozen reference " ++ name))
   return val
 
 pokeVal :: SMTEval exp a => String -> SMTExpr exp a -> Verify ()
@@ -606,7 +631,7 @@ instance SMTEval exp a => Invariant (RefBinding exp a) where
     | RefUnchanged String
     deriving (Eq, Ord, Show, Typeable)
 
-  literals _ name _ = [RefInitialised name, RefUnchanged name]
+  literals name _ = [RefInitialised name, RefUnchanged name]
 instance SMTEval exp a => IsLiteral (Literal (RefBinding exp a)) where
   smtLit _ ctx (RefInitialised name) =
     rb_initialised (lookupContext name ctx :: RefBinding exp a)
@@ -627,8 +652,9 @@ newRef name (_ :: exp a) = do
 getRef :: SMTEval exp a => String -> Verify (SMTExpr exp a)
 getRef name = do
   ref <- peek name
-  safe <- provable "reference initialised" (rb_initialised ref)
-  unless safe (warn (name ++ " read before initialisation"))
+  warning $ do
+    safe <- provable "reference initialised" (rb_initialised ref)
+    unless safe (warn (name ++ " read before initialisation"))
   return (rb_value ref)
 
 setRef :: forall exp a. SMTEval exp a => String -> SMTExpr exp a -> Verify ()
@@ -681,12 +707,13 @@ data ArrBinding exp i a =
   ArrBinding {
     arr_source     :: Maybe String,
     arr_accessible :: SExpr,
-    arr_readable   :: SExpr }
+    arr_readable   :: SExpr,
+    arr_failed     :: SExpr }
   deriving (Eq, Ord, Typeable, Show)
 
 instance (SMTEval exp a, SMTEval exp i) => Mergeable (ArrBinding exp i a) where
-  merge cond (ArrBinding s1 a1 r1) (ArrBinding s2 a2 r2) =
-    ArrBinding (s1 `mplus` s2) (merge cond a1 a2) (merge cond r1 r2)
+  merge cond (ArrBinding s1 a1 r1 f1) (ArrBinding s2 a2 r2 f2) =
+    ArrBinding (s1 `mplus` s2) (merge cond a1 a2) (merge cond r1 r2) (merge cond f1 f2)
 
 instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrBinding exp i a) where
   showModel ArrBinding{arr_source = Nothing} =
@@ -696,30 +723,56 @@ instance (SMTEval exp a, SMTEval exp i) => ShowModel (ArrBinding exp i a) where
     showModel (src :: ArrContents exp i a)
 
 instance (SMTEval exp a, SMTEval exp i) => Exprs (ArrBinding exp i a) where
-  exprs (ArrBinding _ a r) = [a, r]
+  exprs (ArrBinding _ a r f) = [a, r, f]
 instance (SMTEval exp a, SMTEval exp i) => Fresh (ArrBinding exp i a) where
   fresh name = do
     accessible <- freshVar (name ++ ".ok") tBool
     readable <- freshVar (name ++ ".read") tBool
-    return (ArrBinding Nothing accessible readable)
+    failed <- freshVar (name ++ ".failed") tBool
+    return (ArrBinding Nothing accessible readable failed)
 
 instance (SMTEval exp a, SMTEval exp i) => Invariant (ArrBinding exp i a) where
   data Literal (ArrBinding exp i a) =
       ArrAccessible String
     | ArrReadable String
+    | ArrSafetyPreserved String
     deriving (Eq, Ord, Show, Typeable)
 
-  literals _ name _ = [ArrAccessible name, ArrReadable name]
+  literals name _ = [ArrAccessible name, ArrReadable name, ArrSafetyPreserved name]
 
   havoc name arr = do
     arr' <- fresh name :: Verify (ArrBinding exp i a)
     return arr' { arr_source = arr_source arr }
+
+  warns1 ctx name arr =
+    arr { arr_failed = bool False }
+  warns2 ctx name arr =
+    arr {
+      arr_accessible = arr_accessible arr0,
+      arr_readable = arr_readable arr0,
+      arr_failed = arr_failed arr0 }
+    where
+      arr0 :: ArrBinding exp i a
+      arr0 = lookupContext name ctx
+
+  warnLiterals name arr =
+    [(ArrAccessible name, ok),
+     (ArrReadable name, ok)]
+    where
+      ok = SMT.not (arr_failed arr)
+  warnLiterals2 name _ = [ArrSafetyPreserved name]
 
 instance (SMTEval exp a, SMTEval exp i) => IsLiteral (Literal (ArrBinding exp i a)) where
   smtLit _ ctx (ArrAccessible name) =
     arr_accessible (lookupContext name ctx :: ArrBinding exp i a)
   smtLit _ ctx (ArrReadable name) =
     arr_readable (lookupContext name ctx :: ArrBinding exp i a)
+  smtLit old ctx (ArrSafetyPreserved name) =
+    case maybeLookupContext name old of
+      Just (arr :: ArrBinding exp i a) ->
+        arr_failed arr .||.
+        SMT.not (arr_failed (lookupContext name ctx :: ArrBinding exp i a))
+      Nothing -> bool False
 
 -- A wrapper to help with fresh name generation.
 newtype SMTArray exp i a = SMTArray SExpr deriving (Eq, Ord, Show, Mergeable)
@@ -748,7 +801,7 @@ newArr :: forall exp i a. (Num (SMTExpr exp i), SMTOrd (SMTExpr exp i), SMTEval 
 newArr name n = do
   value <- fresh name :: Verify (SMTArray exp i a)
   let arr :: ArrBinding exp i a
-      arr = ArrBinding (Just name) (bool True) (bool True)
+      arr = ArrBinding (Just name) (bool True) (bool True) (bool False)
 
   poke name (ArrContents value n)
   poke name arr
@@ -774,7 +827,7 @@ peekArr name = do
           Just src -> arrayBindings ctx src
     forM_ refs $ \(name, arr) -> do
       arr <- havoc name arr
-      poke name arr
+      poke name (arr { arr_failed = bool True } :: ArrBinding exp i a)
     return Nothing
 
 readArr :: forall exp i a. (SMTOrd (SMTExpr exp i), Ix i, SMTEval exp i, SMTEval exp a) => String -> SMTExpr exp i -> Verify (SMTExpr exp a)
@@ -784,11 +837,13 @@ readArr name ix = do
   case marr of
     Nothing -> fresh "unbound"
     Just (arr :: ArrBinding exp i a, _, src) -> do
-      let
-        prop = SMT.not (ix .==. skolemIndex) .||. arr_readable arr
-
-      safe <- provable "array not modified" prop
-      unless safe (warn ("Unsafe use of frozen array " ++ name))
+      warning $ do
+        let
+          prop = SMT.not (ix .==. skolemIndex) .||. arr_readable arr
+        safe <- provable "array not modified" prop
+        unless safe $ do
+          warn ("Unsafe use of frozen array " ++ name)
+          poke name (arr { arr_failed = bool True } :: ArrBinding exp i a)
       return (selectArray (ac_value src) ix)
 
 hintArr :: forall exp i. (SMTEval exp i, SMTOrd (SMTExpr exp i), Ix i) => SMTExpr exp i -> Verify ()
@@ -987,7 +1042,7 @@ instance (Pred exp ~ pred, SMTEval1 exp) => VerifyInstr PtrCMD (exp :: * -> *) p
 -- An instance for ControlCMD - where the magic happens
 ----------------------------------------------------------------------
 
-instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => VerifyInstr (ControlCMD [SomeLiteral]) exp pred where
+instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => VerifyInstr (ControlCMD [[SomeLiteral]]) exp pred where
   verifyInstr (Comment msg) () = return (Comment msg)
   verifyInstr (Assert Nothing msg) () =
     return (Assert Nothing msg)
@@ -1018,7 +1073,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
         res <- verifyWithResult cond >>= eval . snd
         ite (toSMT res) (verify body) break
         return ()
-    (finished, inv') <- discoverInvariant inv loop
+    (finished, inv', _) <- discoverInvariant inv loop
     (cond', body') <- stack $ do
       (cond', res) <- verifyWithResult cond
       eval res >>= assume "loop guard" . toSMT
@@ -1039,7 +1094,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
           hintFormula (m .<=. i)
           hintFormula (i .<=. n)
           return (if borderIncl hi then i .<=. n else i .<. n)
-        loop = do
+        loop body = do
           cond <- cond
           ite (SMT.not cond) break $ do
             breaks <- breaks (verify body)
@@ -1047,13 +1102,63 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
               i <- peekVal name :: Verify (SMTExpr exp a)
               setRef name (i + fromIntegral step)
           return ()
+      old <- get
       m <- eval lo
       newRef name (undefined :: exp a)
       setRef name m
-      (finished, inv') <- discoverInvariant inv loop
-      body' <- stack (cond >>= assume "loop guard" >> verify body)
+      (finished, inv, ass) <- discoverInvariant inv (loop body)
+      body <- noWarn (stack (cond >>= assume "loop guard" >> verify body))
+
+      let
+        updateCtx :: Context -> (forall a. Invariant a => Context -> String -> a -> a) -> Verify ()
+        updateCtx old f = do
+          forM_ (Map.toList old) $ \(Name name _, Entry (_ :: b)) -> do
+            (x :: b) <- peek name
+            poke name (f old name x)
+      let
+        getLits :: (forall a. Invariant a => String -> a -> [(Literal a, SExpr)]) -> Verify [SomeLiteral]
+        getLits f = do
+          new <- get
+          let
+            cands =
+              [ (SomeLiteral l, e)
+              | (Name name _, Entry x) <- Map.toList new,
+                (l, e) <- f name x ]
+            ok (SomeLiteral _, e) = provable "magic safety invariant" e
+          fmap (map fst) (filterM ok cands)
+      (lits, lits') <- stack $ do
+        -- Iteration 1.
+        i :: SMTExpr exp a <- getRef name
+        updateCtx old (\ctx x -> warns1 ctx x . warns2 ctx x)
+        pre <- get
+        breaks <- breaks (loop body)
+        mid <- get
+        lits1 <- getLits warnLiterals
+
+        -- Iteration 2.
+        assume "loop didn't break" (SMT.not breaks)
+        ass
+        j :: SMTExpr exp a <- getRef name
+        updateCtx mid warns2
+        assume "distinct iterations" (i .<. j)
+        loop body
+        lits2 <- getLits warnLiterals
+
+        ctx <- get
+        lits' <- getLits (\name x -> map (\x -> (x, smtLit pre ctx x)) (warnLiterals2 name x))
+        return (lits1 `intersect` lits2, lits')
+
+      liftIO (putStrLn ("Magic safety literals (body): " ++ show lits))
+      liftIO (putStrLn ("Magic safety literals (invariant): " ++ show lits'))
+
+      ctx <- get
+      forM_ lits (\(SomeLiteral lit) -> assume "magic safety invariant" (smtLit old ctx lit))
+
+      body <- stack $ do
+        forM_ lits (\(SomeLiteral lit) -> assume "magic safety invariant" (smtLit old ctx lit))
+        cond >>= assume "loop guard" >> verify body
       finished
-      return (For inv' range val body')
+      return (For inv range val body)
 
 -- The literals used in predicate abstraction.
 data SomeLiteral = forall a. IsLiteral a => SomeLiteral a
@@ -1072,17 +1177,18 @@ instance Show SomeLiteral where show (SomeLiteral x) = show x
 -- Leaves the verifier in a state which represents an arbitrary loop iteration.
 -- Returns a value which when run leaves the verifier in a state where the loop
 -- has terminated.
-discoverInvariant :: [[SomeLiteral]] -> Verify () -> Verify (Verify (), [[SomeLiteral]])
-discoverInvariant inv body = do
+discoverInvariant :: Maybe [[SomeLiteral]] -> Verify () -> Verify (Verify (), Maybe [[SomeLiteral]], Verify ())
+discoverInvariant minv body = do
   (frame, hints) <- findFrameAndHints
   (_, _, mode) <- ask
-  case mode of
-    Prove -> do
+  case minv of
+    Nothing | mode /= Execute -> do
       ctx <- get
       abstract ctx frame hints >>= refine frame hints
-    Execute -> do
-      assumeLiterals frame inv
-      return (noBreak (breaks body) >>= assume "loop terminated", inv)
+    _ -> do
+      let ass = assumeLiterals frame (fromMaybe [] minv)
+      ass
+      return (noBreak (breaks body) >>= assume "loop terminated", minv, ass)
   where
     -- Suppose we have a while-loop while(E) S, and we know a formula
     -- I(0) which describes the initial state of the loop.
@@ -1174,8 +1280,9 @@ discoverInvariant inv body = do
 
       if clauses == clauses' then do
         printInvariant "Invariant" frame clauses
-        assumeLiterals frame clauses
-        return (noBreak (breaks body) >>= assume "loop terminated", clauses)
+        let ass = assumeLiterals frame clauses
+        ass
+        return (noBreak (breaks body) >>= assume "loop terminated", Just clauses, ass)
       else refine frame hints clauses'
 
     assumeLiterals :: [(Name, Entry)] -> [[SomeLiteral]] -> Verify ()
@@ -1186,19 +1293,14 @@ discoverInvariant inv body = do
         poke name (val :: a)
       mapM_ (\clause -> (evalClause ctx >=> assume (show clause)) clause) clauses
 
-    evalClause old clause = do
-      ctx <- get
-      return (disj [ smtLit old ctx lit | SomeLiteral lit <- clause ])
-
     abstract old frame hints = fmap (usort . map usort) $ do
-      ctx <- get
-      res <- quietly $ fmap concat $ mapM (Abstract.abstract (\clause -> (evalClause old >=> provable (show clause)) clause)) (lits frame ctx)
+      res <- quietly $ fmap concat $ mapM (Abstract.abstract (\clause -> (evalClause old >=> provable (show clause)) clause)) (lits frame)
       printInvariant "Candidate invariant" frame res
-      return (inv ++ res)
+      return res
       where
-        lits frame ctx =
+        lits frame =
           partitionBy (\(SomeLiteral x) -> phase x) $
-          concat [ map SomeLiteral (literals ctx name x) | (Name name _, Entry x) <- frame ] ++
+          concat [ map SomeLiteral (literals name x) | (Name name _, Entry x) <- frame ] ++
           [ SomeLiteral hint | hint <- hints, hb_type (hint_body hint) == tBool ]
 
     printInvariant kind frame [] =
@@ -1218,3 +1320,8 @@ discoverInvariant inv body = do
 
     partitionBy :: Ord b => (a -> b) -> [a] -> [[a]]
     partitionBy f xs = groupBy ((==) `on` f) (sortBy (comparing f) xs)
+
+evalClause :: Context -> [SomeLiteral] -> Verify SExpr
+evalClause old clause = do
+  ctx <- get
+  return (disj [ smtLit old ctx lit | SomeLiteral lit <- clause ])
