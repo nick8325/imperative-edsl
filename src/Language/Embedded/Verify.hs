@@ -98,10 +98,10 @@ proving def mx = do
     Execute      -> return def
 
 -- Only run a computation if we are supposed to be warning.
-warning :: Verify () -> Verify ()
-warning mx = do
+warning :: a -> Verify a -> Verify a
+warning x mx = do
   (_, _, mode) <- ask
-  when (mode == ProveAndWarn) mx
+  if (mode == ProveAndWarn) then mx else return x
 
 -- Assume that a given formula is true.
 assume :: String -> SExpr -> Verify ()
@@ -221,7 +221,7 @@ noBreak = censor (\(_, warns, hints, decls) -> ([], warns, hints, decls))
 
 -- Add a warning to the output.
 warn :: String -> Verify ()
-warn msg = warning $ tell ([], [msg], [], [])
+warn msg = warning () $ tell ([], [msg], [], [])
 
 -- Add a hint to the output.
 hint :: TypedSExpr a => a -> Verify ()
@@ -596,7 +596,7 @@ instance SMTEval exp a => Exprs (ValBinding exp a) where
 peekVal :: forall exp a. SMTEval exp a => String -> Verify (SMTExpr exp a)
 peekVal name = do
   ValBinding val ref <- peek name
-  warning $
+  warning () $
     case ref of
       Nothing -> return ()
       Just refName -> do
@@ -652,7 +652,7 @@ newRef name (_ :: exp a) = do
 getRef :: SMTEval exp a => String -> Verify (SMTExpr exp a)
 getRef name = do
   ref <- peek name
-  warning $ do
+  warning () $ do
     safe <- provable "reference initialised" (rb_initialised ref)
     unless safe (warn (name ++ " read before initialisation"))
   return (rb_value ref)
@@ -837,7 +837,7 @@ readArr name ix = do
   case marr of
     Nothing -> fresh "unbound"
     Just (arr :: ArrBinding exp i a, _, src) -> do
-      warning $ do
+      warning () $ do
         let
           prop = SMT.not (ix .==. skolemIndex) .||. arr_readable arr
         safe <- provable "array not modified" prop
@@ -1126,7 +1126,7 @@ instance (Pred exp ~ pred, SMTEval1 exp, Pred exp Bool, SMTEval exp Bool) => Ver
                 (l, e) <- f name x ]
             ok (SomeLiteral _, e) = provable "magic safety invariant" e
           fmap (map fst) (filterM ok cands)
-      (lits, lits') <- stack $ do
+      (lits, lits') <- warning ([], []) $ stack $ do
         -- Iteration 1.
         i :: SMTExpr exp a <- getRef name
         updateCtx old (\ctx x -> warns1 ctx x . warns2 ctx x)
